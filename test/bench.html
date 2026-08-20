@@ -1,0 +1,125 @@
+<!doctype html>
+<!--
+  Isolates each suspect in the render path and times it at a big-screen canvas
+  size. Screenshot this headless; the numbers land on the page.
+-->
+<html lang="en">
+<head><meta charset="utf-8"><title>moto-charts bench</title>
+<style>body{margin:0;background:#12151c;color:#e6edf3;font:13px/1.6 ui-sans-serif,system-ui,sans-serif}
+pre{font:12px/1.7 ui-monospace,SFMono-Regular,monospace;padding:18px 22px;white-space:pre-wrap}
+b{color:#7ee787}</style></head>
+<body>
+<pre id="out">measuring…</pre>
+<script>
+(function () {
+  // 3840x2160 backing store = a 1920x1080 window on a retina display
+  var W = 3840, H = 2160, FRAMES = 40, N = 2000;
+
+  var pts = [];
+  for (var i = 0; i < N; i++) {
+    pts.push({ x: i * 6, y: 1200 + Math.sin(i / 40) * 420 + Math.sin(i / 7) * 25 });
+  }
+
+  var canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  var g = canvas.getContext('2d');
+
+  function tracePoints(ctx, camX) {
+    ctx.beginPath();
+    var started = false;
+    for (var i = 0; i < pts.length; i++) {
+      var x = pts[i].x - camX, y = pts[i].y;
+      if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+    }
+  }
+
+  var cached = new Path2D();
+  (function () {
+    for (var i = 0; i < pts.length; i++) {
+      if (i === 0) cached.moveTo(pts[i].x, pts[i].y); else cached.lineTo(pts[i].x, pts[i].y);
+    }
+  })();
+
+  function time(label, fn) {
+    fn(); // warm up
+    var t0 = performance.now();
+    for (var f = 0; f < FRAMES; f++) fn(f);
+    var ms = (performance.now() - t0) / FRAMES;
+    return { label: label, ms: ms };
+  }
+
+  var results = [];
+
+  results.push(time('per-point line + shadowBlur 12', function (f) {
+    g.clearRect(0, 0, W, H);
+    tracePoints(g, f * 3);
+    g.strokeStyle = '#7ee787'; g.lineWidth = 3;
+    g.shadowColor = '#7ee787'; g.shadowBlur = 12;
+    g.stroke();
+    g.shadowBlur = 0;
+  }));
+
+  results.push(time('per-point line, no shadowBlur', function (f) {
+    g.clearRect(0, 0, W, H);
+    tracePoints(g, f * 3);
+    g.strokeStyle = '#7ee787'; g.lineWidth = 3;
+    g.stroke();
+  }));
+
+  results.push(time('Path2D once + transform, no shadow', function (f) {
+    g.clearRect(0, 0, W, H);
+    g.save();
+    g.translate(-f * 3, 0);
+    g.strokeStyle = '#7ee787'; g.lineWidth = 3;
+    g.stroke(cached);
+    g.restore();
+  }));
+
+  results.push(time('Path2D + stacked strokes instead of shadow', function (f) {
+    g.clearRect(0, 0, W, H);
+    g.save();
+    g.translate(-f * 3, 0);
+    g.strokeStyle = 'rgba(126,231,135,.18)'; g.lineWidth = 11; g.stroke(cached);
+    g.strokeStyle = '#7ee787'; g.lineWidth = 3; g.stroke(cached);
+    g.restore();
+  }));
+
+  results.push(time('fill under the line + line, no shadow', function (f) {
+    g.clearRect(0, 0, W, H);
+    tracePoints(g, f * 3);
+    g.lineTo(W, H); g.lineTo(0, H); g.closePath();
+    var grad = g.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, 'rgba(126,231,135,.22)');
+    grad.addColorStop(1, 'rgba(126,231,135,.02)');
+    g.fillStyle = grad; g.fill();
+  }));
+
+  // HUD rebuilt via innerHTML on every frame
+  var hud = document.createElement('div');
+  hud.style.cssText = 'position:fixed;left:-9999px;top:0';
+  document.body.appendChild(hud);
+  results.push(time('HUD innerHTML every frame', function (f) {
+    hud.innerHTML = '<div style="font:800 30px/1 monospace">' + (f / 60).toFixed(2) +
+      '</div><div>distance <b>' + f + '%</b> · speed <b>' + f * 3 +
+      '</b> · flips <b>0</b></div><div style="width:220px;height:4px"><div style="width:' +
+      f + '%"></div></div><span>↑</span><span>↓</span><span>←</span><span>→</span>';
+    hud.offsetHeight; // force layout, like a real frame would
+  }));
+
+  var base = results[0].ms;
+  var lines = results.map(function (r) {
+    var budget = (r.ms / 16.7 * 100).toFixed(0);
+    return r.label.padEnd(50) + r.ms.toFixed(2).padStart(7) + ' ms/frame   ' +
+      String(budget).padStart(4) + '% of the 60fps budget';
+  });
+  document.getElementById('out').innerHTML =
+    'canvas ' + W + '×' + H + ' (= 1920×1080 at dpr 2), ' + N + ' terrain points, ' +
+    FRAMES + ' frames per measurement\none frame budget at 60 fps = 16.7 ms\n\n' +
+    lines.join('\n') +
+    '\n\n<b>line+shadow and fill together ≈ ' +
+    (results[0].ms + results[4].ms).toFixed(1) + ' ms/frame</b>' +
+    '   (' + ((results[0].ms + results[4].ms) / 16.7 * 100).toFixed(0) + '% of budget)';
+  window.__bench = results;
+})();
+</script>
+</body></html>

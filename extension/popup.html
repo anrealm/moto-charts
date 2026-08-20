@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; width: 280px; background: #12151c; color: #e6edf3;
+    font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
+  }
+  .pad { padding: 14px 16px 16px; }
+  h1 { font-size: 14px; margin: 0 0 2px; font-weight: 700; }
+  .sub { font-size: 11px; opacity: .55; margin-bottom: 14px; }
+  button {
+    width: 100%; border: 0; border-radius: 8px; padding: 10px 12px;
+    font: 600 13px/1 inherit; cursor: pointer; color: #fff; background: #2f81f7;
+  }
+  button.ghost { background: #262c36; margin-top: 8px; font-weight: 500; }
+  button:hover { filter: brightness(1.12); }
+  #status { margin-top: 12px; font-size: 11px; opacity: .7; min-height: 15px; }
+  #list { margin-top: 10px; font: 11px/1.6 ui-monospace, SFMono-Regular, monospace; opacity: .8; }
+  #list div { display: flex; align-items: center; gap: 6px; }
+  i.sw { width: 10px; height: 3px; border-radius: 2px; flex: none; }
+  .keys { margin-top: 14px; padding-top: 12px; border-top: 1px solid #262c36; font-size: 11px; opacity: .6; }
+  kbd {
+    background: #262c36; border-radius: 4px; padding: 1px 5px;
+    font: 500 10px ui-monospace, monospace;
+  }
+</style>
+</head>
+<body>
+<div class="pad">
+  <h1>moto-charts</h1>
+  <div class="sub">ride a motorbike over a chart line</div>
+
+  <button id="go">Ride the chart</button>
+  <button class="ghost" id="diag">What was found on the page</button>
+
+  <div id="status"></div>
+  <div id="list"></div>
+
+  <div class="keys">
+    <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> — start without the popup<br>
+    <kbd>↑</kbd> throttle · <kbd>←</kbd><kbd>→</kbd> lean · <kbd>R</kbd> restart · <kbd>Esc</kbd> quit<br>
+    <kbd>1</kbd> as drawn · <kbd>2</kbd> rideable · <kbd>3</kbd> mellow
+  </div>
+</div>
+<script src="launcher.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>

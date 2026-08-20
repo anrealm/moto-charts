@@ -1,0 +1,54 @@
+<!doctype html>
+<!--
+  Verifies the *shipped* artifact, not the sources: loads dist/moto.bundle.js,
+  which auto-starts the picker. Screenshot this headless to see the picker
+  overlay highlight every line it found.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>moto-charts — bundle check</title>
+<style>
+  body { margin: 0; background: #16181d; color: #e6edf3; font: 14px system-ui, sans-serif; }
+  .wrap { padding: 30px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 style="font-size:17px">Checking dist/moto.bundle.js</h1>
+  <svg id="chart" viewBox="0 0 1000 320" width="1000" height="320">
+    <path id="serieA" fill="none" stroke="#7ee787" stroke-width="2.5"></path>
+    <path id="serieB" fill="none" stroke="#f97583" stroke-width="2"></path>
+    <!-- a flat rule and a tiny glyph: both must be rejected as track candidates -->
+    <line x1="40" y1="300" x2="960" y2="300" stroke="#ffffff22"></line>
+    <path id="glyph" d="M10 10 L26 10 L26 26 Z" fill="#58a6ff" stroke="none"></path>
+  </svg>
+  <div id="result" style="margin-top:16px;font:12px ui-monospace,monospace;opacity:.8"></div>
+</div>
+
+<script>
+  // authored zig-zag: only needs to be long and wavy enough to be a candidate
+  var A = [150, 120, 190, 100, 240, 130, 170, 210, 90, 200, 160, 250, 110, 230, 140, 180, 120, 220];
+  var B = A.map(function (v, i) { return 60 + ((v * 7 + i * 53) % 190); });
+  function d(s) {
+    return s.map(function (v, i) {
+      return (i ? 'L' : 'M') + (40 + 920 * i / (s.length - 1)).toFixed(1) + ' ' + v.toFixed(1);
+    }).join(' ');
+  }
+  document.getElementById('serieA').setAttribute('d', d(A));
+  document.getElementById('serieB').setAttribute('d', d(B));
+</script>
+<script src="../dist/moto.bundle.js"></script>
+<script>
+  // The bundle calls MotoCharts.start() itself; report what the extractor saw.
+  var found = MotoCharts._collectPaths();
+  document.getElementById('result').textContent =
+    'candidates: ' + found.length + '  ->  ' +
+    found.map(function (c) { return (c.el.id || c.el.tagName) + '(' + Math.round(c.width) + 'px)'; }).join(', ');
+  window.__bundleCheck = {
+    candidates: found.map(function (c) { return c.el.id || c.el.tagName; }),
+    version: MotoCharts.version
+  };
+</script>
+</body>
+</html>
