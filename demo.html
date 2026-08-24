@@ -160,6 +160,11 @@
       'paths found: ' + all.length + '\n' + lines.join('\n');
   };
 
+  /* ?picker=1 opens the line picker over the demo chart, for documentation shots. */
+  if (/[?&]picker=1/.test(location.search)) {
+    MotoCharts.start();
+  }
+
   /*
    * ?colorcheck=1 renders a ride for each series and reads the actual pixels of
    * the drawn track back, so the colour claim is checked against the canvas
@@ -292,10 +297,15 @@
     var secs = parseFloat(m[1]) || 0;
     var item = greenLine();
     var modeMatch = /[?&]mode=(\w+)/.exec(location.search);
+    // &shot=1 dresses the frame for a README screenshot: no debug label and no
+    // PAUSED badge, since the loop is stopped rather than paused
+    var forShot = /[?&]shot=1/.test(location.search);
+    var scaleMatch = /[?&]scale=([\d.]+)/.exec(location.search);
     var game = MotoCharts.ride(MotoCharts._samplePath(item, 2), {
       color: item.color,
-      label: 'auto ' + secs + 's',
-      mode: modeMatch ? modeMatch[1] : undefined
+      label: forShot ? '' : 'auto ' + secs + 's',
+      mode: modeMatch ? modeMatch[1] : undefined,
+      scale: scaleMatch ? parseFloat(scaleMatch[1]) : undefined
     });
     game.paused = true; // freeze the rAF loop so only our simulated state shows
     var steps = Math.round(secs * 60);
@@ -304,6 +314,7 @@
       game.update(1 / 60);
     }
     game.input = { throttle: 1, tilt: 0, brake: false };
+    if (forShot) { game.paused = false; game.alive = false; }
     game.render();
     window.__autoState = {
       x: Math.round(game.bike.x), maxX: Math.round(game.terrain.maxX),
