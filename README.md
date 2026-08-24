@@ -2,6 +2,8 @@
 
 Ride a motorbike over the line of any chart on the page, Gravity Defied style.
 
+![A motorbike climbing a chart line turned into terrain](docs/ride.png)
+
 The extension knows nothing about the charting library or its API. It takes the
 line straight out of the DOM: finds `<path>`/`<polyline>` inside an `<svg>`,
 samples it with `getPointAtLength()` and turns it into terrain. That works with
@@ -51,6 +53,8 @@ calls `MotoCharts.start()` itself.
 
 The page dims and every candidate line is highlighted — click the one you want
 to ride.
+
+![The picker highlighting every candidate line on a chart](docs/pick.png)
 
 | Key | Action |
 |---|---|

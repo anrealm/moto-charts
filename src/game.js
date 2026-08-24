@@ -702,15 +702,18 @@
     g.lineTo(6, -2);
     g.stroke();
 
-    // seat + tank
-    g.fillStyle = b.crashed ? '#7a2430' : '#2f81f7';
+    // seat + tank; outlined because black on a dark track loses its silhouette
     g.beginPath();
     g.moveTo(-12, -12);
     g.lineTo(4, -14);
     g.lineTo(6, -8);
     g.lineTo(-10, -7);
     g.closePath();
+    g.fillStyle = b.crashed ? '#3a1218' : '#0a0c11';
     g.fill();
+    g.strokeStyle = b.crashed ? '#f97583' : '#9aa4b2';
+    g.lineWidth = 1;
+    g.stroke();
 
     // rider
     g.strokeStyle = b.crashed ? '#f97583' : '#ffd479';
