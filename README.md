@@ -4,6 +4,9 @@ Ride a motorbike over the line of any chart on the page, Gravity Defied style.
 
 ![A motorbike climbing a chart line turned into terrain](docs/ride.png)
 
+**[Try it in the browser](https://anrealm.github.io/moto-charts/)** — the demo page
+runs the whole game against a chart drawn with plain SVG, no install needed.
+
 The extension knows nothing about the charting library or its API. It takes the
 line straight out of the DOM: finds `<path>`/`<polyline>` inside an `<svg>`,
 samples it with `getPointAtLength()` and turns it into terrain. That works with
@@ -218,7 +221,7 @@ resolution multiplier are shown in the HUD.
 Reproduce the measurements:
 
 ```bash
-open "demo.html?perf=1"       # the real render loop at 3840×2160
+open "index.html?perf=1"      # the real render loop at 3840×2160
 open "test/bench.html"        # individual canvas operations
 ```
 
@@ -230,7 +233,7 @@ No dependencies, no build tooling beyond a shell script.
 node --test test/physics.test.mjs test/sandbox.test.mjs   # 30 tests
 ./build.sh                  # src/ + extension/ -> dist/
 node tools/make-icons.js    # redraw icons (only when the artwork changes)
-open demo.html              # local demo page with an SVG chart
+open index.html             # local demo page with an SVG chart
 ```
 
 `dist/` is generated from `src/` and `extension/` — do not edit it by hand.
@@ -243,7 +246,8 @@ open demo.html              # local demo page with an SVG chart
   (service worker); everything else is shared.
 * `tools/make-icons.js` — draws the icons as PNGs with no dependencies, using a
   minimal PNG encoder over the built-in zlib.
-* `demo.html` — a page with a chart drawn as plain SVG. The series are invented to
+* `index.html` — the demo page, a chart drawn as plain SVG. It sits at the repo
+  root so GitHub Pages serves it as the site itself. The series are invented to
   exercise the pipeline: two cliffs of different depth, a stepped climb, a spike,
   and a flat line that must be rejected as a track. `?auto=<seconds>` runs the
   track on autopilot and renders the frame immediately, which makes headless
@@ -257,7 +261,7 @@ Headless frame capture:
 ```bash
 /Applications/Firefox.app/Contents/MacOS/firefox --headless --no-remote \
   --profile /tmp/ff-moto-profile --window-size=1400,900 \
-  --screenshot /tmp/moto.png "file://$PWD/demo.html?auto=5"
+  --screenshot /tmp/moto.png "file://$PWD/index.html?auto=5"
 ```
 
 ## What is tested, and what is not
@@ -265,7 +269,7 @@ Headless frame capture:
 * Physics, track pipeline and trick scoring — 27 node tests in
   `test/physics.test.mjs`.
 * Rendering, the picker and the built `dist/moto.bundle.js` — verified by headless
-  Firefox screenshots of `demo.html` and `test/bundle-check.html`.
+  Firefox screenshots of `index.html` and `test/bundle-check.html`.
 * The `.xpi` — installed into a throwaway Firefox Developer Edition profile;
   the browser accepted it as MV3 with `active: true`, `appDisabled: false`.
 * Loading inside a Firefox content-script sandbox — 3 tests in
