@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "moto-charts",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Ride a motorbike over any SVG chart line — a physics trials game played on your own data.",
   "author": "anrealm",
   "browser_specific_settings": {
