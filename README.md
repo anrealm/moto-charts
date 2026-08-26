@@ -1,6 +1,7 @@
 # moto-charts
 
-Ride a motorbike over the line of any chart on the page, Gravity Defied style.
+Ride a motorbike over the line of any chart on the page — a physics trials game
+played on your own data.
 
 ![A motorbike climbing a chart line turned into terrain](docs/ride.png)
 
@@ -301,6 +302,13 @@ A second lesson from the same incident: "the script never loaded" and "the page
 has no chart lines" were reported by the **same** message, which sent the first
 diagnosis in the wrong direction. They are now distinct — `top.ok === false`
 versus `candidates === 0`.
+
+## Credits
+
+Inspired by *Gravity Defied: Trial Racing* (Codebrew Software, 2004), the J2ME
+motorbike trials game. This project shares none of its code, art or levels — the
+terrain here comes from whatever chart happens to be on your screen — and it is
+not affiliated with or endorsed by Codebrew Software.
 
 ## License
 
