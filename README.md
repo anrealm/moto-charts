@@ -233,11 +233,62 @@ No dependencies, no build tooling beyond a shell script.
 ```bash
 node --test test/physics.test.mjs test/sandbox.test.mjs   # 30 tests
 ./build.sh                  # src/ + extension/ -> dist/
+tools/check-dist.sh         # check what the build produced
 node tools/make-icons.js    # redraw icons (only when the artwork changes)
 open index.html             # local demo page with an SVG chart
 ```
 
 `dist/` is generated from `src/` and `extension/` — do not edit it by hand.
+
+### Releasing
+
+Two workflows in `.github/workflows/`, both dependency-free — they run the same
+three commands as above:
+
+* `ci.yml` — tests, build and `tools/check-dist.sh` on every push to `main` and
+  every PR. The built `dist/` is uploaded as a workflow artifact, so a branch can
+  be installed and ridden without building it locally. An artifact from someone
+  else's pull request is that pull request's code, packaged as an installable
+  extension with `activeTab` and `scripting` — read the diff before installing it
+  into a browser you use.
+* `release.yml` — on a `v*.*.*` tag, builds from the tagged commit and attaches
+  `moto-charts.xpi`, `moto-charts-chrome.zip`, `moto.bundle.js` and
+  `bookmarklet.txt` to that tag's release. It also pins the manifests to the tag,
+  so a forgotten version bump fails the release instead of shipping.
+
+The workflow writes no release notes and publishes nothing, which makes the order
+matter. **Push the tag first.** The build runs against it and leaves a draft
+release with the assets already attached; open that draft, write the notes,
+publish. If a check fails, nothing is public and the tag can be deleted and
+re-pushed. Publishing the release first inverts this: the release is public
+before the checks run, so a forgotten version bump leaves published notes
+pointing at downloads that are not there, behind a tag that should not be moved.
+
+If an upload fails on a tag that is already public, the workflow can be re-run
+from the Actions tab against that tag rather than moving it. `v1.0.0` and
+`v1.0.1` predate the workflow and their assets were uploaded by hand.
+
+`tools/check-dist.sh` covers what a directory listing cannot: both archives open
+as zips, the two manifests agree on a version, the bundle contains both sources
+and ends with the call that starts the game, `MotoCharts.version` in `src/game.js`
+— a third version string, shipped inside all four artifacts — matches the
+manifests, and the bookmarklet still decodes to exactly the bundle it was built
+from.
+
+What is inside each archive is checked by `tools/check-archive.mjs`, against the
+artifact rather than against a list. The manifest names the background scripts,
+the popup and the icons; the popup names its scripts; `launcher.js` names the
+files it injects into the page — every path any of them mentions has to be in the
+zip. Deriving it that way is the point: a list of filenames kept in the checker
+would drift along with the one in `build.sh`, and two lists that drift together
+verify nothing. Names alone are not enough either, since a zip can carry
+`content/game.js` as zero bytes or as last week's copy and still list every
+expected entry — so every member must also be non-empty and byte-identical to the
+file in the repo it was copied from. That is the claim a release makes about an
+asset, checked. It also pins each tree to its own manifest (Firefox
+`background.scripts` vs Chrome `background.service_worker` — swap them and the
+extension installs, then does nothing), and rejects the `__MACOSX` and
+`.DS_Store` entries a Finder-compressed archive carries.
 
 * `src/physics.js` — terrain, track pipeline, bike physics. DOM-free, so it runs
   under node.
@@ -273,6 +324,9 @@ Headless frame capture:
   Firefox screenshots of `index.html` and `test/bundle-check.html`.
 * The `.xpi` — installed into a throwaway Firefox Developer Edition profile;
   the browser accepted it as MV3 with `active: true`, `appDisabled: false`.
+* The shape of the four built files — `tools/check-dist.sh`, run by CI on every
+  change and against the tag at release time. It checks the packaging, not that
+  a browser accepts the result; the profile install above is still a manual step.
 * Loading inside a Firefox content-script sandbox — 3 tests in
   `test/sandbox.test.mjs`, see below. 30 in total.
 * **Not verified by clicking**: the popup and the keyboard shortcut. Headless

@@ -42,7 +42,11 @@ build_extension() {
 build_extension firefox
 build_extension chrome
 
-# .xpi is a plain zip; -X keeps macOS resource forks out of it
+# .xpi is a plain zip; -X keeps macOS resource forks out of it.
+# The archives are removed first because `zip` merges into an existing file
+# rather than replacing it: rename a source file, rebuild without clearing
+# dist/, and the shipped archive carries both the new name and the dead one.
+rm -f dist/moto-charts.xpi dist/moto-charts-chrome.zip
 ( cd dist/extension-firefox && zip -qrX ../moto-charts.xpi . )
 ( cd dist/extension-chrome  && zip -qrX ../moto-charts-chrome.zip . )
 
