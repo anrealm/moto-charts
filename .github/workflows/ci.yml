@@ -1,0 +1,49 @@
+name: CI
+
+# Runs the unit tests and a real build on every change, so a broken build is
+# caught on the branch rather than at tag time. Needs no credentials and no
+# package install: the repo has no dependencies.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Three pushes to a branch in a row should not run three full builds; only the
+# newest is interesting. Never cancels a run on main.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Unit tests
+        run: node --test test/physics.test.mjs test/sandbox.test.mjs
+
+      - name: Build
+        run: ./build.sh
+
+      - name: Check artifacts
+        run: tools/check-dist.sh
+
+      # Kept so a build can be downloaded and installed from a PR without
+      # anyone running build.sh by hand.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 14
+          # v4 refuses a second upload under the same name, which would turn
+          # "Re-run all jobs" on a green run red for no reason.
+          overwrite: true

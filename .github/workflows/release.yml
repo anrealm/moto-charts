@@ -1,0 +1,113 @@
+name: Release
+
+# Builds the four shippable files on a clean machine from the tagged commit and
+# attaches them to that tag's release. Before this, they were built on a laptop
+# and uploaded by hand, so nothing tied an asset to the tag it shipped under.
+#
+# The intended order is tag first: pushing the tag produces a draft release with
+# the assets attached, and the notes are written into that draft by hand. That
+# way the checks below run while nothing is public yet — a forgotten version bump
+# fails the build instead of stranding published notes next to missing downloads
+# behind a tag that should not be moved. Publishing a release by hand first also
+# works; the workflow then only uploads onto it.
+#
+# The workflow never writes notes and never publishes.
+on:
+  push:
+    tags: ['v*.*.*']
+  # Manual re-run for a tag whose upload failed but which is already public and
+  # must not be moved. Note the limit: a dispatch runs the workflow file as it
+  # exists *at the selected ref*, so this cannot reach tags cut before this
+  # commit — v1.0.0 and v1.0.1 stay hand-uploaded.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      # One list, used by both the upload and the summary.
+      ASSETS: >-
+        dist/moto-charts.xpi
+        dist/moto-charts-chrome.zip
+        dist/moto.bundle.js
+        dist/bookmarklet.txt
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Passed through env rather than interpolated into the script body: a ref
+      # name is repository data, and `${{ }}` splices it in before bash parses.
+      - name: Resolve the tag
+        id: tag
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$REF_TYPE" != "tag" ]; then
+            echo "This workflow must run on a tag; got $REF" >&2
+            exit 1
+          fi
+          echo "tag=$REF_NAME"         >> "$GITHUB_OUTPUT"
+          echo "version=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Unit tests
+        run: node --test test/physics.test.mjs test/sandbox.test.mjs
+
+      - name: Build
+        run: ./build.sh
+
+      # Fails the release if the manifests or the code still carry the previous
+      # version — the bump is a separate commit and is easy to forget. A
+      # pre-release tag such as v1.0.1-rc1 is rejected here by design: an
+      # extension manifest version cannot carry a suffix.
+      - name: Check artifacts against the tag
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: tools/check-dist.sh "$VERSION"
+
+      - name: Attach the artifacts to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          read -ra files <<< "$ASSETS"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # --clobber deletes each existing asset before uploading its
+            # replacement, so a re-run that dies mid-upload leaves the release
+            # short of assets. That is the price of being re-runnable at all;
+            # re-running again restores them.
+            gh release upload "$TAG" "${files[@]}" --clobber
+            echo "Attached ${#files[@]} assets to the existing release $TAG."
+          else
+            gh release create "$TAG" "${files[@]}" \
+              --draft --title "$TAG" \
+              --notes "Built by the Release workflow from \`$TAG\`. Notes to be written before publishing."
+            echo "No release existed for $TAG — created a draft with the assets attached."
+          fi
+
+      - name: Summary
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### $TAG"
+            echo
+            echo '| file | size |'
+            echo '| --- | ---: |'
+            for f in $ASSETS; do
+              printf '| `%s` | %s KB |\n' "$(basename "$f")" "$(( $(wc -c < "$f") / 1024 ))"
+            done
+            echo
+            echo 'The `.xpi` is unsigned: release Firefox will not install it permanently.'
+          } >> "$GITHUB_STEP_SUMMARY"
