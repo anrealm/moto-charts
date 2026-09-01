@@ -124,7 +124,11 @@ else bad "$BOOKMARKLET spans $((newlines + 1)) lines — a bookmarklet must be o
 
 # `catch` keeps a thrown stack trace out of the report: the last line of a node
 # trace is its version banner, which says nothing about what broke.
-bookmarklet_error=$(node -e '
+# The verdict comes from node's exit status; stderr is captured only to explain
+# a failure. Judging by "was anything written to stderr" would turn a future
+# runtime warning — an ExperimentalWarning, an inherited NODE_OPTIONS — into a
+# FAIL on a perfectly good bookmarklet.
+if bookmarklet_error=$(node -e '
   try {
     const fs = require("fs");
     const line = fs.readFileSync("dist/bookmarklet.txt", "utf8").trim();
@@ -135,9 +139,11 @@ bookmarklet_error=$(node -e '
       throw new Error("decoded body does not match dist/moto.bundle.js");
     }
   } catch (e) { console.error(e.message); process.exit(1); }
-' 2>&1)
-if [ -z "$bookmarklet_error" ]; then ok "$BOOKMARKLET decodes to the built bundle"
-else bad "$BOOKMARKLET: $bookmarklet_error"; fi
+' 2>&1 >/dev/null); then
+  ok "$BOOKMARKLET decodes to the built bundle"
+else
+  bad "$BOOKMARKLET: ${bookmarklet_error:-node exited non-zero without a message}"
+fi
 
 if [ "$fail" -eq 0 ]; then
   printf '\ndist/ looks shippable%s\n' "${EXPECT_VERSION:+ as $EXPECT_VERSION}"

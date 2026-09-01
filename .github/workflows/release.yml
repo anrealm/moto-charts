@@ -16,9 +16,8 @@ on:
   push:
     tags: ['v*.*.*']
   # Manual re-run for a tag whose upload failed but which is already public and
-  # must not be moved. Note the limit: a dispatch runs the workflow file as it
-  # exists *at the selected ref*, so this cannot reach tags cut before this
-  # commit — v1.0.0 and v1.0.1 stay hand-uploaded.
+  # must not be moved. v1.0.0 and v1.0.1 predate this workflow and their assets
+  # were uploaded by hand; a dispatch against them has not been tried.
   workflow_dispatch:
 
 permissions:

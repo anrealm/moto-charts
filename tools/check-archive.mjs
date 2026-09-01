@@ -104,20 +104,35 @@ if (popup && files.has(popup)) {
 // (Chrome's service worker cannot use <script>), and the file list handed to
 // scripting.executeScript() to inject the game into the page. The injected
 // files are the ones no manifest mentions, so nothing else would catch them.
-for (const js of [...refs.keys()].filter((f) => f.endsWith('.js') && files.has(f))) {
+//
+// The worklist keeps draining as scanning discovers more scripts, rather than
+// iterating a snapshot: in the Chrome tree `launcher.js` is reached *only*
+// through `importScripts` inside `background.js`, so a snapshot would skip it —
+// and with it the injected content files — leaving the alarm below unreachable.
+const scanned = new Set();
+const scannableJs = () => [...refs.keys()].filter((f) => f.endsWith('.js') && files.has(f) && !scanned.has(f));
+let injectedTotal = 0;
+
+for (let queue = scannableJs(); queue.length > 0; queue = scannableJs()) {
+  const js = queue[0];
+  scanned.add(js);
   const code = readText(js);
+
   for (const [, imported] of code.matchAll(/importScripts\(\s*["']([^"']+)["']/g)) want(imported, js);
 
+  // A `= ['a.js', 'b.js']` literal is how the file list handed to
+  // scripting.executeScript() is written; the name it is assigned to does not
+  // matter, so nothing here depends on it being called MOTO_FILES.
   const injected = [...code.matchAll(/=\s*\[\s*((?:["'][^"']+\.js["']\s*,?\s*)+)\]/g)]
     .flatMap(([, body]) => [...body.matchAll(/["']([^"']+\.js)["']/g)].map(([, f]) => f));
-  if (js.endsWith('launcher.js')) {
-    if (injected.length === 0) {
-      // Not a pass: the injected content files are invisible to every other
-      // check here, so losing track of them must be loud.
-      bad(`${js} declares no list of injected .js files — check-archive.mjs needs updating`);
-    }
-    for (const f of injected) want(f, `${js} (injected into the page)`);
-  }
+  injectedTotal += injected.length;
+  for (const f of injected) want(f, `${js} (injected into the page)`);
+}
+
+if (injectedTotal === 0) {
+  // Not a pass: the injected content files are invisible to every other check
+  // here, so losing track of them must be loud.
+  bad(`no list of injected .js files found in ${scanned.size} scanned scripts — check-archive.mjs needs updating`);
 }
 
 const missing = [...refs].filter(([file]) => !files.has(file));

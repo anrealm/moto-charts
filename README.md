@@ -264,10 +264,9 @@ re-pushed. Publishing the release first inverts this: the release is public
 before the checks run, so a forgotten version bump leaves published notes
 pointing at downloads that are not there, behind a tag that should not be moved.
 
-A manual re-run is possible from the Actions tab if an upload fails on a tag that
-is already public, but only for tags cut at or after the workflow was added: a
-dispatch runs the workflow file as it exists at the selected ref, so `v1.0.0` and
-`v1.0.1` cannot be reached this way.
+If an upload fails on a tag that is already public, the workflow can be re-run
+from the Actions tab against that tag rather than moving it. `v1.0.0` and
+`v1.0.1` predate the workflow and their assets were uploaded by hand.
 
 `tools/check-dist.sh` covers what a directory listing cannot: both archives open
 as zips, the two manifests agree on a version, the bundle contains both sources
