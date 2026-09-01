@@ -4,12 +4,17 @@
  *
  *   node tools/check-archive.mjs dist/moto-charts.xpi firefox [1.0.1]
  *
- * Nothing here is a list of filenames. A hardcoded list next to build.sh's
- * hardcoded `cp` would drift with it and verify nothing: add a file, forget to
- * copy it, and both lists stay silent while the extension installs and throws on
- * load. So the expected set is derived from the artifact — the manifest names the
+ * The expected set is not a list of filenames. A hardcoded list next to
+ * build.sh's hardcoded `cp` would drift with it and verify nothing: add a file,
+ * forget to copy it, and both lists stay silent while the extension installs and
+ * throws on load. So it is derived from the artifact — the manifest names the
  * background scripts, the popup and the icons; the popup names its own scripts;
- * the scripts name what they import and what they inject into the page.
+ * the scripts name what they import and what they inject into the page, followed
+ * transitively.
+ *
+ * One list does remain: sourceFor() below encodes where build.sh copies things
+ * from. It will drift with build.sh too — but loudly, as an unaccounted member,
+ * rather than as a check that silently stops checking.
  *
  * Presence of a name is not enough either: a zip can carry `content/game.js` as
  * zero bytes, or last week's copy, and still list every expected entry. So every
@@ -36,7 +41,16 @@ const bad = (m) => { console.log(`  FAIL  ${label}: ${m}`); failed = true; };
 
 // `unzip -l` rather than `-Z1`: the listing carries the uncompressed size, and a
 // member being empty is one of the failures worth catching.
-const listing = execFileSync('unzip', ['-l', archive], { encoding: 'utf8' });
+let listing;
+try {
+  // stderr captured rather than inherited: unzip's multi-line complaint about a
+  // file that is not a zip would otherwise land in the log ahead of the verdict.
+  listing = execFileSync('unzip', ['-l', archive], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+} catch (e) {
+  // Reached only when run directly; check-dist.sh gates on zip validity first.
+  bad(`cannot be listed as a zip (${e.message.split('\n')[0]})`);
+  process.exit(1);
+}
 const members = new Map(); // name -> uncompressed size
 for (const line of listing.split('\n')) {
   const m = line.match(/^\s*(\d+)\s+\S+\s+\S+\s+(\S.*)$/);
@@ -45,8 +59,19 @@ for (const line of listing.split('\n')) {
 // Directory entries are listed at size 0 and are not payload.
 const files = new Map([...members].filter(([name]) => !name.endsWith('/')));
 
-const readText = (name) => execFileSync('unzip', ['-p', archive, name], { encoding: 'utf8' });
-const readBytes = (name) => execFileSync('unzip', ['-p', archive, name], { maxBuffer: 32 * 1024 * 1024 });
+const MAX_MEMBER = 32 * 1024 * 1024; // the default 1 MB would crash on a bundled script
+const readText = (name) => execFileSync('unzip', ['-p', archive, name], { encoding: 'utf8', maxBuffer: MAX_MEMBER });
+const readBytes = (name) => execFileSync('unzip', ['-p', archive, name], { maxBuffer: MAX_MEMBER });
+
+// Commented-out code must not count as a reference, in either direction: a
+// commented `= ['content/legacy.js']` would demand a file nobody ships, and a
+// commented-out inject list would satisfy the "declares no list" alarm below
+// while the real one is gone. Only whole-line and block comments are removed —
+// stripping every `//` would cut into string literals such as `https://`.
+const stripJsComments = (code) => code
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/^[ \t]*\/\/.*$/gm, '');
+const stripHtmlComments = (html) => html.replace(/<!--[\s\S]*?-->/g, '');
 
 // --- the manifest, and the browser it was built for --------------------------
 let manifest;
@@ -58,6 +83,9 @@ try {
 }
 
 if (manifest.manifest_version !== 3) bad(`manifest_version is ${manifest.manifest_version}, expected 3`);
+// Absent, it prints as "version undefined" in every line below and compares
+// equal to the other manifest's absent version.
+if (typeof manifest.version !== 'string' || !manifest.version) bad('manifest has no version');
 
 // build.sh copies a different manifest into each tree. Swapping them produces an
 // extension that installs and then does nothing, which no other check notices.
@@ -83,8 +111,13 @@ if (expectVersion && manifest.version !== expectVersion) {
 // Each reference records where it came from, so a failure names the file that
 // asked for the missing path rather than just the path.
 const refs = new Map();
+// `"./popup.html"` and `"popup.html"` are the same member. Normalising in one
+// place matters: looking a path up in its raw form while storing it normalised
+// made the popup count as present but never get opened, and everything it
+// pulls in disappeared from the checked set.
+const norm = (file) => file.replace(/^\.?\//, '');
 const want = (file, source) => {
-  if (typeof file === 'string' && file) refs.set(file.replace(/^\.?\//, ''), source);
+  if (typeof file === 'string' && file) refs.set(norm(file), source);
 };
 
 for (const s of manifest.background?.scripts ?? []) want(s, 'manifest background.scripts');
@@ -93,11 +126,14 @@ want(manifest.action?.default_popup, 'manifest action.default_popup');
 for (const icon of Object.values(manifest.icons ?? {})) want(icon, 'manifest icons');
 for (const icon of Object.values(manifest.action?.default_icon ?? {})) want(icon, 'manifest action.default_icon');
 
-// The popup pulls in its own scripts.
-const popup = manifest.action?.default_popup;
+// The popup pulls in its own scripts. `src` may be double-quoted, single-quoted
+// or bare, with spaces around the `=` — all valid HTML, and a checker that only
+// understood one spelling would quietly stop following the popup.
+const popup = manifest.action?.default_popup && norm(manifest.action.default_popup);
 if (popup && files.has(popup)) {
-  const html = readText(popup);
-  for (const [, src] of html.matchAll(/<script[^>]+src=["']([^"']+)["']/g)) want(src, popup);
+  const html = stripHtmlComments(readText(popup));
+  const SCRIPT_SRC = /<script[^>]*\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
+  for (const m of html.matchAll(SCRIPT_SRC)) want(m[1] ?? m[2] ?? m[3], popup);
 }
 
 // Scripts pull in more scripts two ways: importScripts() in the background
@@ -116,14 +152,18 @@ let injectedTotal = 0;
 for (let queue = scannableJs(); queue.length > 0; queue = scannableJs()) {
   const js = queue[0];
   scanned.add(js);
-  const code = readText(js);
+  const code = stripJsComments(readText(js));
 
-  for (const [, imported] of code.matchAll(/importScripts\(\s*["']([^"']+)["']/g)) want(imported, js);
+  // importScripts() takes any number of paths, not just the first.
+  for (const [, args] of code.matchAll(/importScripts\(([^)]*)\)/g)) {
+    for (const [, imported] of args.matchAll(/["']([^"']+)["']/g)) want(imported, js);
+  }
 
-  // A `= ['a.js', 'b.js']` literal is how the file list handed to
-  // scripting.executeScript() is written; the name it is assigned to does not
-  // matter, so nothing here depends on it being called MOTO_FILES.
-  const injected = [...code.matchAll(/=\s*\[\s*((?:["'][^"']+\.js["']\s*,?\s*)+)\]/g)]
+  // An array of .js paths is how the file list handed to
+  // scripting.executeScript() is written — either assigned to a name
+  // (`= [...]`) or passed inline as the `files:` argument. Neither the variable
+  // name nor the choice between the two forms is depended on here.
+  const injected = [...code.matchAll(/[:=]\s*\[\s*((?:["'][^"']+\.js["']\s*,?\s*)+)\]/g)]
     .flatMap(([, body]) => [...body.matchAll(/["']([^"']+\.js)["']/g)].map(([, f]) => f));
   injectedTotal += injected.length;
   for (const f of injected) want(f, `${js} (injected into the page)`);
@@ -180,7 +220,8 @@ if (drifted.length === 0 && untraceable.length === 0) {
 }
 for (const d of drifted) bad(`content differs from the source it was built from: ${d}`);
 for (const u of untraceable) {
-  bad(`${u} has no corresponding source file — if build.sh started generating it, teach sourceFor() about it`);
+  bad(`${u} has no corresponding source file — a leftover in the archive from a `
+    + `previous build, or a file build.sh now generates and sourceFor() has not been told about`);
 }
 
 // --- nothing rode along that should not have --------------------------------

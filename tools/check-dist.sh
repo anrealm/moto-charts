@@ -61,16 +61,21 @@ node tools/check-archive.mjs "$CRX" chrome  "$EXPECT_VERSION" || fail=1
 
 # Same source, same release: the two manifests must never drift apart. Checked
 # here rather than per-archive, because neither archive can see the other.
-read_version() { unzip -p "$1" manifest.json | node -e '
+# stderr is dropped: unzip writes "caution: filename not matched" straight into
+# the CI log for a manifest that isn't there, and the missing version is
+# reported below anyway.
+read_version() { unzip -p "$1" manifest.json 2>/dev/null | node -e '
   let s = "";
   process.stdin.on("data", (d) => s += d)
-    .on("end", () => { try { console.log(JSON.parse(s).version); } catch { console.log("unreadable"); } });
+    .on("end", () => {
+      try { console.log(JSON.parse(s).version ?? "unreadable"); } catch { console.log("unreadable"); }
+    });
 '; }
 v_ff=$(read_version "$XPI")
 v_cr=$(read_version "$CRX")
 if [ -z "$v_ff" ] || [ "$v_ff" = unreadable ] || [ -z "$v_cr" ] || [ "$v_cr" = unreadable ]; then
-  # Without this, two unreadable manifests both yield "" and compare equal —
-  # an ok line reading "both manifests agree on version".
+  # Without this, two manifests that yield nothing usable compare equal to each
+  # other — an ok line reading "both manifests agree on version".
   bad "could not read a version out of both manifests (xpi '$v_ff', chrome zip '$v_cr')"
 elif [ "$v_ff" = "$v_cr" ]; then
   ok "both manifests agree on version $v_ff"
@@ -119,8 +124,14 @@ fi
 # trailing newline counts as 0 lines, and a real two-line file without one counts
 # as 1. Either way `wc -l` gives the wrong verdict on a healthy or broken build.
 newlines=$(tr -cd '\n' < "$BOOKMARKLET" | wc -c | tr -d ' ')
-if [ "$newlines" -le 1 ]; then ok "$BOOKMARKLET is a single line"
-else bad "$BOOKMARKLET spans $((newlines + 1)) lines — a bookmarklet must be one"; fi
+if [ "$newlines" -le 1 ]; then
+  ok "$BOOKMARKLET is a single line"
+else
+  # A trailing newline does not open a line, so it does not count towards the
+  # total the message reports.
+  if [ -n "$(tail -c 1 "$BOOKMARKLET")" ]; then spans=$((newlines + 1)); else spans="$newlines"; fi
+  bad "$BOOKMARKLET spans $spans lines — a bookmarklet must be one"
+fi
 
 # `catch` keeps a thrown stack trace out of the report: the last line of a node
 # trace is its version banner, which says nothing about what broke.
