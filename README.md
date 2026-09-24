@@ -20,13 +20,23 @@ One MV3 codebase, built for both browsers. It declares `activeTab` and
 `scripting` and no host permissions at all, so it can only reach a page in
 response to you pressing the button or the shortcut.
 
-### Firefox Developer Edition — permanent
+### Firefox — permanent, signed
+
+Download `moto-charts.xpi` from the
+[latest release](https://github.com/anrealm/moto-charts/releases/latest) and open
+it in Firefox (drag it onto a window, or `about:addons` → gear → **Install Add-on
+From File**). The release `.xpi` is signed by addons.mozilla.org as an unlisted
+add-on, so any release Firefox accepts it; it is not listed in the directory.
+
+The steps below are for a build of your own from `dist/`, which is unsigned.
+
+### Firefox Developer Edition — permanent, own build
 
 1. `about:config` → set `xpinstall.signatures.required` to **false**
    (release Firefox ignores this switch — see below).
 2. `about:addons` → gear → **Install Add-on From File** → `dist/moto-charts.xpi`.
 
-### Release Firefox — temporary, until restart
+### Release Firefox — temporary, own build
 
 Release Firefox only installs signed extensions, so an unsigned `.xpi` cannot be
 installed permanently. What works:
@@ -34,9 +44,7 @@ installed permanently. What works:
 `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on** → pick
 `dist/extension-firefox/manifest.json`.
 
-Fully functional, but gone after a browser restart. The only route to a permanent
-install on release Firefox is signing the build on addons.mozilla.org — an
-"unlisted" signature works and does not publish the add-on to the directory.
+Fully functional, but gone after a browser restart.
 
 ### Chrome / Chromium — permanent
 
