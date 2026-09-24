@@ -1,0 +1,12 @@
+{
+  "addons": {
+    "moto-charts@anrealm": {
+      "updates": [
+        {
+          "version": "1.1.1",
+          "update_link": "https://github.com/anrealm/moto-charts/releases/download/v1.1.1/moto-charts.xpi"
+        }
+      ]
+    }
+  }
+}
