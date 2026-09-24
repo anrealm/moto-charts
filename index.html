@@ -301,6 +301,9 @@
     // PAUSED badge, since the loop is stopped rather than paused
     var forShot = /[?&]shot=1/.test(location.search);
     var scaleMatch = /[?&]scale=([\d.]+)/.exec(location.search);
+    // &policy=gas rides the way a newcomer does, throttle held and no lean, which
+    // is the quickest way to put the crash screen in a screenshot
+    var gasOnly = /[?&]policy=gas/.test(location.search);
     var game = MotoCharts.ride(MotoCharts._samplePath(item, 2), {
       color: item.color,
       label: forShot ? '' : 'auto ' + secs + 's',
@@ -310,7 +313,7 @@
     game.paused = true; // freeze the rAF loop so only our simulated state shows
     var steps = Math.round(secs * 60);
     for (var i = 0; i < steps; i++) {
-      game.input = MotoPhysics.autopilot(game.bike, game.cfg);
+      game.input = gasOnly ? { throttle: 1, tilt: 0, brake: false } : MotoPhysics.autopilot(game.bike, game.cfg);
       game.update(1 / 60);
     }
     game.input = { throttle: 1, tilt: 0, brake: false };
@@ -318,7 +321,7 @@
     game.render();
     window.__autoState = {
       x: Math.round(game.bike.x), maxX: Math.round(game.terrain.maxX),
-      crashed: game.bike.crashed, finished: game.bike.finished,
+      crashed: game.bike.crashed, crashKind: MotoPhysics.crashKind(game.bike), finished: game.bike.finished,
       time: +game.time.toFixed(2), trackPts: game.terrain.points.length
     };
   }

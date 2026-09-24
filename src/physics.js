@@ -607,6 +607,18 @@
     return b;
   }
 
+  /*
+   * Which way a crash went, so the game can say what to do about it: 'nose'
+   * (pitched forward onto the head), 'back' (flipped over backwards) or 'void'.
+   * The angle keeps counting through flips, hence the wrap to (-pi, pi].
+   */
+  function crashKind(b) {
+    if (!b.crashed) return null;
+    if (b.crashReason !== 'head') return b.crashReason;
+    var a = Math.atan2(Math.sin(b.angle), Math.cos(b.angle));
+    return a > 0 ? 'nose' : 'back';
+  }
+
   /* Runs `step` in fixed sub-steps so a long frame cannot tunnel through terrain. */
   function advance(b, terrain, input, frameDt, cfg) {
     var c = cfg || config();
@@ -642,6 +654,7 @@
     bikePoint: bikePoint,
     wheelPositions: wheelPositions,
     step: step,
-    advance: advance
+    advance: advance,
+    crashKind: crashKind
   };
 });

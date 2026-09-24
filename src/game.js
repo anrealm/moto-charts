@@ -23,6 +23,29 @@
   var Z = 2147483000;
   var STORE_KEY = 'moto-charts:best';
 
+  /*
+   * Crash advice. The first two crashes of a kind get the tip for that kind;
+   * after that a random general one, so a repeat crash is not met with the
+   * same sentence every time.
+   */
+  var CRASH_TIPS = {
+    nose: 'Nose went down. Hold <b>←</b> in the air to lift it before you land.',
+    back: 'Flipped over backwards. Ease off <b>←</b> sooner, <b>→</b> brings the nose down.',
+    void: 'Fell off the end of the track.'
+  };
+  var GENERAL_TIPS = [
+    'In the air <b>←</b> / <b>→</b> is the only control. The throttle does nothing there.',
+    'In the air keep the bike level or a touch nose-up, not parallel to the slope.',
+    'Land on both wheels at once. One wheel first kicks the bike over.',
+    'After a crest the bike keeps rotating forward. Catch it with <b>←</b>.',
+    'Stuck on a climb? <b>↓</b> rolls back for a run-up.',
+    'Too hard? <b>2</b> caps the climbs, <b>3</b> smooths the whole track.',
+    'A full turn in the air that you land counts as a flip.',
+    '<b>R</b> restarts at any moment, not only after a crash.'
+  ];
+  // flights with a lean in them before the air hint stops showing
+  var LEAN_LESSONS = 3;
+
   /* [width in screen px, alpha] — outermost first, stacked under the solid line */
   var GLOW = [[20, 0.07], [12, 0.13], [6, 0.26]];
 
@@ -261,12 +284,17 @@
     this.scale = this.opts.scale || 1.55;
     this.paused = false;
     this.attempts = 0;
-    this.mode = this.opts.mode || this.loadMode() || 'realistic';
+    // a first ride on the 1:1 track is a stall or a crash within seconds
+    this.mode = this.opts.mode || this.loadMode() || 'rideable';
     this.glow = this.opts.glow !== false;
     this.pixelBudget = this.opts.pixelBudget || 4.2e6;
     this.frameMs = 16.7;
     this.degraded = false;
     this.best = this.loadBest();
+    this.leanLessons = this.loadLeanLessons();
+    this.crashCounts = {};
+    this.lastTip = null;
+    this.rideTotal = 0;
     this.build();
   }
 
@@ -291,6 +319,14 @@
 
   Game.prototype.saveMode = function (m) {
     try { localStorage.setItem(STORE_KEY + ':mode', m); } catch (e) {}
+  };
+
+  Game.prototype.loadLeanLessons = function () {
+    try { return parseInt(localStorage.getItem(STORE_KEY + ':leanLessons'), 10) || 0; } catch (e) { return 0; }
+  };
+
+  Game.prototype.saveLeanLessons = function () {
+    try { localStorage.setItem(STORE_KEY + ':leanLessons', String(this.leanLessons)); } catch (e) {}
   };
 
   /*
@@ -353,8 +389,14 @@
     this.toast = el('div', 'position:absolute;left:50%;top:22%;transform:translate(-50%,-50%);' +
       'font:800 34px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:.08em;color:#ffd479;' +
       'text-shadow:0 4px 24px #000;pointer-events:none;opacity:0;transition:opacity .18s', this.root);
-    this.help = el('div', 'position:absolute;right:18px;bottom:14px;opacity:.55;text-align:right;' +
-      'font-size:12px;pointer-events:none;line-height:1.7', this.root);
+    this.coach = el('div', 'position:absolute;left:50%;bottom:16%;transform:translateX(-50%);' +
+      'font-size:18px;color:#ffd479;background:#0a0c11cc;padding:6px 14px;border-radius:8px;pointer-events:none;' +
+      'opacity:0;transition:opacity .2s', this.root);
+    this.coach.innerHTML = 'in the air <b>←</b> / <b>→</b> rotates the bike · keep it level';
+    // full strength until the player has had a look at it, then out of the way
+    this.help = el('div', 'position:absolute;right:18px;bottom:14px;opacity:.95;text-align:right;' +
+      'font-size:14px;pointer-events:none;line-height:1.7;transition:opacity .6s,font-size .6s', this.root);
+    this.helpDimmed = false;
     this.help.innerHTML =
       '<b>↑</b> throttle &nbsp; <b>↓</b> reverse &nbsp; <b>Space</b> brake &nbsp; <b>←/→</b> lean<br>' +
       '<b>1</b> as drawn &nbsp; <b>2</b> rideable &nbsp; <b>3</b> mellow<br>' +
@@ -422,6 +464,8 @@
     this.stalled = 0;
     this.lastFlips = 0;
     this.toastUntil = 0;
+    this.airRun = 0;
+    this.leanedThisFlight = false;
     this.banner.style.display = 'none';
     this.cam = { x: this.bike.x, y: this.bike.y };
     this.camInit = false;
@@ -505,8 +549,11 @@
           this.showBanner('FINISH', this.time.toFixed(2) + ' s · record ' + this.best.toFixed(2) + ' s', '#7ee787');
         }
       } else if (b.crashed) {
-        this.showBanner('CRASHED', 'R to try again', '#f97583');
+        this.showBanner('CRASHED', '<div style="margin-bottom:8px">' + this.crashTip(P.crashKind(b)) + '</div>' +
+          '<b>R</b> to try again', '#f97583');
       }
+
+      this.coachLean(b, dt);
 
       // Full throttle, wheels down, going nowhere: the climb is beyond the bike.
       // On the 1:1 track that is an expected outcome, so say what to do about it
@@ -540,6 +587,42 @@
 
     this.trail.push({ x: b.x, y: b.y });
     if (this.trail.length > 90) this.trail.shift();
+  };
+
+  Game.prototype.crashTip = function (kind) {
+    var n = this.crashCounts[kind] = (this.crashCounts[kind] || 0) + 1;
+    var tip = CRASH_TIPS[kind];
+    if (!tip || n > 2) {
+      var pool = GENERAL_TIPS.filter(function (t) { return t !== this.lastTip; }, this);
+      tip = pool[Math.floor(Math.random() * pool.length)];
+    }
+    this.lastTip = tip;
+    return tip;
+  };
+
+  /*
+   * Nothing on screen says the bike can be rotated, and the crash that follows
+   * a crest is a forward rotation nobody caught. So the first few real flights
+   * say it while they happen; a flight the player leans in counts as learned.
+   */
+  Game.prototype.coachLean = function (b, dt) {
+    this.rideTotal += dt;
+    var airborne = !b.onGround && !b.crashed && !b.finished;
+    this.airRun = airborne ? this.airRun + dt : 0;
+    if (airborne && this.input.tilt !== 0 && !this.leanedThisFlight) {
+      this.leanedThisFlight = true;
+      if (this.leanLessons < LEAN_LESSONS) { this.leanLessons++; this.saveLeanLessons(); }
+    }
+    if (!airborne) this.leanedThisFlight = false;
+    // a graze off a bump is not a flight worth interrupting
+    var show = this.airRun > 0.2 && this.leanLessons < LEAN_LESSONS;
+    this.coach.style.opacity = show ? '1' : '0';
+
+    if (!this.helpDimmed && (this.rideTotal > 12 || this.leanLessons >= LEAN_LESSONS)) {
+      this.helpDimmed = true;
+      this.help.style.opacity = '.55';
+      this.help.style.fontSize = '12px';
+    }
   };
 
   Game.prototype.showToast = function (text) {
