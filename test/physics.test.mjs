@@ -288,6 +288,29 @@ test('head contact registers as a crash', () => {
   assert.equal(b.crashReason, 'head');
 });
 
+function crashAt(angle) {
+  const t = flat();
+  const c = P.config();
+  const b = P.createBike(t, c);
+  b.angle = angle;
+  b.y = t.yAt(b.x) - 20;  // head below the surface, both wheels still above it
+  P.advance(b, t, NEUTRAL, 1 / 60, c);
+  return b;
+}
+
+test('a crash is told apart by which way the bike went over', () => {
+  assert.equal(P.crashKind(crashAt(2.8)), 'nose');
+  assert.equal(P.crashKind(crashAt(-2.8)), 'back');
+  // the angle keeps counting through flips; one turn later it is the same crash
+  assert.equal(P.crashKind(crashAt(2.8 + Math.PI * 2)), 'nose');
+  assert.equal(P.crashKind(crashAt(-2.8 - Math.PI * 2)), 'back');
+});
+
+test('a bike that has not crashed has no crash kind', () => {
+  const t = flat();
+  assert.equal(P.crashKind(P.createBike(t, P.config())), null);
+});
+
 /* ---------------------------------------------------------------- tricks */
 
 /*

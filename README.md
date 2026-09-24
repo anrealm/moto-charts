@@ -83,10 +83,34 @@ The throttle only bites while the rear wheel is on the ground — airborne it do
 nothing. The HUD says so outright ("airborne — throttle does nothing"), because a
 dead key otherwise reads as a bug.
 
+### First rides
+
+Leaning is the control a newcomer does not find. Held throttle with no lean
+crashes on the demo in about two seconds, on the first crest: the bike leaves
+it already rotating forward, nothing damps that in the air, and it lands on the
+rider's head. On 40 random-walk charts with no designed cliffs the same rider
+crashed 10–13 times out of 40 on the 1:1 and rideable tracks, every time nose
+first. So the game teaches it where it happens:
+
+* while airborne, the first flights say "in the air ← / → rotates the bike ·
+  keep it level";
+  once the player has leaned in three flights it stops, and that is remembered
+* the crash screen says which way the bike went over and what catches it
+  (`crashKind` in `src/physics.js`), then after two crashes of a kind gives a
+  random general tip instead
+* the controls legend starts at full strength and dims after 12 s of riding or
+  once leaning has been learned
+* a first ride starts on **rideable**, not on the 1:1 track
+
+"Level" means level, not parallel to the slope below. Matching the slope is what
+a newcomer does first, and in a simulated rider with a 0.2 s reaction it finishes
+fewer of those 40 charts than no lean at all (20 against 27); holding the bike
+level or slightly nose-up finishes 34.
+
 ## Track modes
 
 Switchable mid-ride with <kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd>; the choice is
-remembered. Best times are per mode: a lap over flattened terrain is not
+remembered, and a first ride starts on rideable. Best times are per mode: a lap over flattened terrain is not
 comparable to one over 1:1 geometry.
 
 | | what it does | the price |
@@ -231,7 +255,7 @@ open "test/bench.html"        # individual canvas operations
 No dependencies, no build tooling beyond a shell script.
 
 ```bash
-node --test test/physics.test.mjs test/sandbox.test.mjs   # 30 tests
+node --test test/physics.test.mjs test/sandbox.test.mjs   # 32 tests
 ./build.sh                  # src/ + extension/ -> dist/
 node tools/make-icons.js    # redraw icons (only when the artwork changes)
 open index.html             # local demo page with an SVG chart
@@ -252,8 +276,9 @@ open index.html             # local demo page with an SVG chart
   exercise the pipeline: two cliffs of different depth, a stepped climb, a spike,
   and a flat line that must be rejected as a track. `?auto=<seconds>` runs the
   track on autopilot and renders the frame immediately, which makes headless
-  screenshots useful. Other query flags: `?mode=<name>`, `?perf=1`, `?keytest=1`,
-  `?colorcheck=1`.
+  screenshots useful; `&policy=gas` rides it throttle-only instead, the way a
+  newcomer does, which is the quick route to a crash screen. Other query flags:
+  `?mode=<name>`, `?perf=1`, `?keytest=1`, `?colorcheck=1`.
 * `test/bundle-check.html` — checks the built artifact rather than the sources.
 * `test/color-cases.html` — every convention for specifying a line colour.
 
@@ -267,14 +292,14 @@ Headless frame capture:
 
 ## What is tested, and what is not
 
-* Physics, track pipeline and trick scoring — 27 node tests in
+* Physics, track pipeline and trick scoring — 29 node tests in
   `test/physics.test.mjs`.
 * Rendering, the picker and the built `dist/moto.bundle.js` — verified by headless
   Firefox screenshots of `index.html` and `test/bundle-check.html`.
 * The `.xpi` — installed into a throwaway Firefox Developer Edition profile;
   the browser accepted it as MV3 with `active: true`, `appDisabled: false`.
 * Loading inside a Firefox content-script sandbox — 3 tests in
-  `test/sandbox.test.mjs`, see below. 30 in total.
+  `test/sandbox.test.mjs`, see below. 32 in total.
 * **Not verified by clicking**: the popup and the keyboard shortcut. Headless
   cannot press them.
 * If a chart lives in a cross-origin iframe, `activeTab` cannot reach it. The
