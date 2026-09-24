@@ -922,7 +922,7 @@
   /* ------------------------------------------------------------------- API */
 
   var API = {
-    version: '1.1.0',
+    version: '1.1.1',
     current: null,
 
     /* Opens the picker, then rides whatever line was clicked. */
