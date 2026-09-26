@@ -710,12 +710,23 @@
     var draw = function (i) { self.drawVideoFrame(view, cl, Math.min(i / VIDEO_FPS, cl.duration)); };
     var progress = function (text) { label.innerHTML = text + ' &nbsp;·&nbsp; <b>Esc</b> cancels'; };
 
-    job.promise = pickEncoder(opts.method).then(function (enc) {
-      if (enc) { self.lastVideoMethod = 'encoder'; return encodeFast(job, enc, frames, draw, canvas, progress); }
+    function realtime() {
       var mime = opts.method === 'encoder' ? null : recorderType(canvas);
       if (!mime) { self.showToast('NO VIDEO IN THIS BROWSER'); return null; }
       self.lastVideoMethod = 'recorder';
       return recordRealtime(job, mime, frames, draw, canvas, progress, cl.duration);
+    }
+    job.promise = pickEncoder(opts.method).then(function (enc) {
+      if (!enc) return realtime();
+      self.lastVideoMethod = 'encoder';
+      return encodeFast(job, enc, frames, draw, canvas, progress).then(null, function (e) {
+        // isConfigSupported can say yes and encode() still refuse (seen in
+        // Firefox builds without the encoder), so a failed encoder falls back
+        if (job.cancelled) return null;
+        if (global.console) console.warn('moto-charts: encoder failed, recording in real time instead', e);
+        job.stop = null;
+        return realtime();
+      });
     }).then(null, function (e) {
       self.showToast('VIDEO FAILED');
       if (global.console) console.warn('moto-charts: video failed', e);
@@ -753,7 +764,9 @@
     function next() {
       if (i >= ENCODERS.length) return null;
       var e = ENCODERS[i++];
-      var cfg = { codec: e.codec, width: VIDEO_W, height: VIDEO_H, bitrate: VIDEO_BPS, framerate: VIDEO_FPS };
+      // 'realtime' runs libvpx at its fast settings: measured in Firefox 156 on
+      // a Mac, VP9 went from 0.8x to 3.3x real time, at the same bitrate
+      var cfg = { codec: e.codec, width: VIDEO_W, height: VIDEO_H, bitrate: VIDEO_BPS, framerate: VIDEO_FPS, latencyMode: 'realtime' };
       return global.VideoEncoder.isConfigSupported(cfg).then(function (r) {
         return r.supported ? { cfg: cfg, mux: e.mux } : next();
       }, next);
