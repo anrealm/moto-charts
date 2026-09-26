@@ -417,11 +417,15 @@
     // &video=1 records the simulated run the way V does, and reports the file
     // instead of downloading it: a headless check of the whole video path
     if (/[?&]video=1/.test(location.search)) {
-      game.saveVideo({ download: false }).then(function (blob) {
+      // &method=encoder|recorder forces one of the two recording paths
+      var methodMatch = /[?&]method=(\w+)/.exec(location.search);
+      var videoT0 = performance.now();
+      game.saveVideo({ download: false, method: methodMatch ? methodMatch[1] : undefined }).then(function (blob) {
         if (!blob) { window.__video = { error: 'no video' }; return; }
+        var took = (performance.now() - videoT0) / 1000;
         var fr = new FileReader();
         fr.onload = function () {
-          window.__video = { size: blob.size, type: blob.type, dataUrl: fr.result };
+          window.__video = { size: blob.size, type: blob.type, method: game.lastVideoMethod, took: took, dataUrl: fr.result };
         };
         fr.readAsDataURL(blob);
       }, function (e) { window.__video = { error: String(e) }; });

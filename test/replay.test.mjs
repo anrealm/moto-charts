@@ -121,3 +121,30 @@ test('an unknown layout is left alone', () => {
   const cut = fixture('chrome-head.webm').subarray(0, 60);   // Info cut off
   assert.equal(R.webmWithDuration(cut, 1), null);
 });
+
+test('poseAt blends between logged frames and keeps discrete fields from the earlier one', () => {
+  const log = R.createLog();
+  R.push(log, frame(0, { x: 0, a: 0, n: 0 }));
+  R.push(log, frame(0.1, { x: 10, a: 1, n: 1 }));
+  const cl = R.clip(log);
+  const p = R.poseAt(cl, 0.025);
+  assert.ok(Math.abs(p.x - 2.5) < 1e-9);
+  assert.ok(Math.abs(p.a - 0.25) < 1e-9);
+  assert.equal(p.n, 0);
+  assert.equal(R.poseAt(cl, 5).x, 10);          // past the end: the last pose
+});
+
+test('webmMux writes a file whose header reads back, with clusters at key frames', () => {
+  const frames = [];
+  for (let i = 0; i < 300; i++) frames.push({ data: new Uint8Array([i & 0xff, 1, 2]), ms: Math.round(i * 1000 / 60), key: i % 120 === 0 });
+  const out = R.webmMux({ codec: 'V_VP9', width: 1280, height: 720, durationMs: 5000, frames });
+  assert.deepEqual([...out.subarray(0, 4)], [0x1a, 0x45, 0xdf, 0xa3]);
+  // the Duration it wrote is where the header patcher finds it
+  const patched = R.webmWithDuration(out.slice(0, 4096), 5);
+  assert.equal(patched.length, Math.min(4096, out.length));
+  let clusters = 0;
+  for (let i = 0; i < out.length - 4; i++) {
+    if (out[i] === 0x1f && out[i + 1] === 0x43 && out[i + 2] === 0xb6 && out[i + 3] === 0x75) clusters++;
+  }
+  assert.equal(clusters, 3);
+});

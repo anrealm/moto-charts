@@ -53,8 +53,8 @@
   /* [width in screen px, alpha] — outermost first, stacked under the solid line */
   var GLOW = [[20, 0.07], [12, 0.13], [6, 0.26]];
 
-  // video of a run: 720p, bitrate capped so a full minute stays around 20 MB
-  var VIDEO_W = 1280, VIDEO_H = 720, VIDEO_FPS = 30, VIDEO_BPS = 2500000;
+  // video of a run: 720p60, bitrate capped so a full minute stays around 30 MB
+  var VIDEO_W = 1280, VIDEO_H = 720, VIDEO_FPS = 60, VIDEO_BPS = 4000000;
   var VIDEO_TYPES = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
   var VIDEO_HINT = '<div style="margin-top:6px;font-size:13px;opacity:.7"><b>V</b> saves a video of this run</div>';
 
@@ -676,9 +676,13 @@
 
   /*
    * Renders the last finished or crashed run into a WebM and downloads it.
-   * The replay draws logged poses into its own 720p canvas, in real time,
-   * because MediaRecorder timestamps frames by the wall clock. Resolves with
-   * the Blob, or null when there is nothing to record or it was cancelled.
+   * The replay draws logged poses, blended to a steady 60 fps, into its own
+   * 720p canvas. Where WebCodecs exists (https pages in current Chrome and
+   * Firefox) frames go to the encoder one by one with exact timestamps, faster
+   * than real time; elsewhere MediaRecorder records the canvas as it plays,
+   * which takes as long as the clip. Resolves with the Blob, or null when there
+   * is nothing to record, it failed, or it was cancelled.
+   * `opts.method` ('encoder' / 'recorder') forces a path, for tests.
    */
   Game.prototype.saveVideo = function (opts) {
     opts = opts || {};
@@ -686,76 +690,50 @@
     var log = R.ended(this.log) ? this.log : this.lastRun;
     if (!R.ended(log)) { this.showToast('FINISH OR CRASH FIRST'); return Promise.resolve(null); }
 
-    var Rec = global.MediaRecorder || (typeof window !== 'undefined' ? window.MediaRecorder : null);
-    var mime = Rec && VIDEO_TYPES.filter(function (m) { return Rec.isTypeSupported(m); })[0];
+    var self = this, cl = R.clip(log);
     var canvas = el('canvas', 'position:absolute;left:50%;top:46%;transform:translate(-50%,-50%);' +
       'width:min(72vw,960px);border:1px solid #30363d;border-radius:10px;box-shadow:0 12px 40px #000c', this.root);
-    if (!mime || !canvas.captureStream) {
-      canvas.remove();
-      this.showToast('NO VIDEO IN THIS BROWSER');
-      return Promise.resolve(null);
-    }
     canvas.width = VIDEO_W;
     canvas.height = VIDEO_H;
     var label = el('div', 'position:absolute;left:50%;bottom:9%;transform:translateX(-50%);' +
       'font-size:14px;opacity:.85;text-shadow:0 1px 3px #000;white-space:nowrap', this.root);
-
-    var self = this, cl = R.clip(log);
     var view = Object.create(this);
     view.ctx = canvas.getContext('2d');
     view.w = VIDEO_W;
     view.h = VIDEO_H;
     view.glow = true;
 
-    var chunks = [];
-    var rec = new Rec(canvas.captureStream(VIDEO_FPS), { mimeType: mime, videoBitsPerSecond: VIDEO_BPS });
-    rec.ondataavailable = function (ev) { if (ev.data && ev.data.size) chunks.push(ev.data); };
-
     var bannerShown = this.banner.style.display;
     this.banner.style.display = 'none';
-    var job = this.recording = { rec: rec, cancelled: false };
-    job.promise = new Promise(function (resolve) {
-      function cleanup() {
-        canvas.remove();
-        label.remove();
-        self.banner.style.display = bannerShown;
-        self.recording = null;
-        // key releases were swallowed while recording; nothing may stay held
-        self.keys = {};
-        self.readInput();
-      }
-      rec.onstop = function () {
-        cleanup();
-        if (job.cancelled) { resolve(null); return; }
-        var raw = new Blob(chunks, { type: 'video/webm' });
-        var HEAD = 4096;
-        raw.slice(0, HEAD).arrayBuffer().then(function (buf) {
-          // without a length players cannot seek; if the header is not one we
-          // know how to patch, the file still plays, just without it
-          var head = R.webmWithDuration(new Uint8Array(buf), cl.duration);
-          return head ? new Blob([head, raw.slice(HEAD)], { type: 'video/webm' }) : raw;
-        }).then(function (blob) {
-          if (opts.download !== false) {
-            self.download(blob, 'moto-ride-' + T.trackId(self.source.points) + '.webm');
-            self.showToast('VIDEO SAVED');
-          }
-          resolve(blob);
-        });
-      };
+    var job = this.recording = { cancelled: false, stop: null };
+    var frames = Math.floor(cl.duration * VIDEO_FPS) + 1;
+    var draw = function (i) { self.drawVideoFrame(view, cl, Math.min(i / VIDEO_FPS, cl.duration)); };
+    var progress = function (text) { label.innerHTML = text + ' &nbsp;·&nbsp; <b>Esc</b> cancels'; };
 
-      self.drawVideoFrame(view, cl, 0);
-      rec.start(1000);
-      var t0 = performance.now();
-      (function tick() {
-        if (job.cancelled || rec.state !== 'recording') return;
-        var t = (performance.now() - t0) / 1000;
-        self.drawVideoFrame(view, cl, R.frameIndex(cl, Math.min(t, cl.duration)));
-        label.innerHTML = 'recording the last run · ' + Math.min(t, cl.duration).toFixed(0) +
-          ' / ' + cl.duration.toFixed(0) + ' s &nbsp;·&nbsp; <b>Esc</b> cancels';
-        // one frame past the end, so the recorder holds the final pose
-        if (t > cl.duration + 1 / VIDEO_FPS) { rec.stop(); return; }
-        requestAnimationFrame(tick);
-      })();
+    job.promise = pickEncoder(opts.method).then(function (enc) {
+      if (enc) { self.lastVideoMethod = 'encoder'; return encodeFast(job, enc, frames, draw, canvas, progress); }
+      var mime = opts.method === 'encoder' ? null : recorderType(canvas);
+      if (!mime) { self.showToast('NO VIDEO IN THIS BROWSER'); return null; }
+      self.lastVideoMethod = 'recorder';
+      return recordRealtime(job, mime, frames, draw, canvas, progress, cl.duration);
+    }).then(null, function (e) {
+      self.showToast('VIDEO FAILED');
+      if (global.console) console.warn('moto-charts: video failed', e);
+      return null;
+    }).then(function (blob) {
+      canvas.remove();
+      label.remove();
+      self.banner.style.display = bannerShown;
+      self.recording = null;
+      // key releases were swallowed while recording; nothing may stay held
+      self.keys = {};
+      self.readInput();
+      if (!blob || job.cancelled) return null;
+      if (opts.download !== false) {
+        self.download(blob, 'moto-ride-' + T.trackId(self.source.points) + '.webm');
+        self.showToast('VIDEO SAVED');
+      }
+      return blob;
     });
     return job.promise;
   };
@@ -763,17 +741,122 @@
   Game.prototype.cancelVideo = function () {
     if (!this.recording) return;
     this.recording.cancelled = true;
-    if (this.recording.rec.state !== 'inactive') this.recording.rec.stop();
+    if (this.recording.stop) this.recording.stop();
   };
 
-  /* One replay frame: the logged pose through the live renderer, plus a canvas HUD. */
-  Game.prototype.drawVideoFrame = function (view, cl, idx) {
-    var f = cl.frames[idx], g = view.ctx;
+  var ENCODERS = [{ codec: 'vp09.00.10.08', mux: 'V_VP9' }, { codec: 'vp8', mux: 'V_VP8' }];
+
+  /* First WebCodecs config this browser can encode, or null. */
+  function pickEncoder(method) {
+    if (method === 'recorder' || !global.VideoEncoder || !global.VideoFrame) return Promise.resolve(null);
+    var i = 0;
+    function next() {
+      if (i >= ENCODERS.length) return null;
+      var e = ENCODERS[i++];
+      var cfg = { codec: e.codec, width: VIDEO_W, height: VIDEO_H, bitrate: VIDEO_BPS, framerate: VIDEO_FPS };
+      return global.VideoEncoder.isConfigSupported(cfg).then(function (r) {
+        return r.supported ? { cfg: cfg, mux: e.mux } : next();
+      }, next);
+    }
+    return Promise.resolve(next());
+  }
+
+  function recorderType(canvas) {
+    var Rec = global.MediaRecorder;
+    if (!Rec || !canvas.captureStream) return null;
+    return VIDEO_TYPES.filter(function (m) { return Rec.isTypeSupported(m); })[0] || null;
+  }
+
+  /*
+   * WebCodecs path: draw frame i, hand it to the encoder stamped i/60 s, and
+   * pack the output into WebM ourselves. Works in slices so the page keeps
+   * painting the preview, and waits whenever the encoder queue backs up.
+   */
+  function encodeFast(job, enc, frames, draw, canvas, progress) {
+    return new Promise(function (resolve, reject) {
+      var out = [], failed = null;
+      var encoder = new global.VideoEncoder({
+        output: function (chunk) {
+          var data = new Uint8Array(chunk.byteLength);
+          chunk.copyTo(data);
+          out.push({ data: data, ms: Math.round(chunk.timestamp / 1000), key: chunk.type === 'key' });
+        },
+        error: function (e) { failed = e; }
+      });
+      encoder.configure(enc.cfg);
+      job.stop = function () { try { encoder.close(); } catch (e) {} };
+      var i = 0, step = 1e6 / VIDEO_FPS;
+      (function slice() {
+        if (job.cancelled) { resolve(null); return; }
+        if (failed) { reject(failed); return; }
+        var until = performance.now() + 24;
+        while (i < frames && encoder.encodeQueueSize < 8 && performance.now() < until) {
+          draw(i);
+          var vf = new global.VideoFrame(canvas, { timestamp: Math.round(i * step), duration: Math.round(step) });
+          // a key frame every 2 s keeps seeking cheap
+          encoder.encode(vf, { keyFrame: i % (VIDEO_FPS * 2) === 0 });
+          vf.close();
+          i++;
+        }
+        progress('rendering the last run · ' + Math.round(100 * i / frames) + '%');
+        if (i < frames) { setTimeout(slice, 0); return; }
+        encoder.flush().then(function () {
+          encoder.close();
+          if (job.cancelled) { resolve(null); return; }
+          resolve(new Blob([R.webmMux({
+            codec: enc.mux, width: VIDEO_W, height: VIDEO_H,
+            durationMs: frames * 1000 / VIDEO_FPS, frames: out
+          })], { type: 'video/webm' }));
+        }, function (e) { if (job.cancelled) resolve(null); else reject(failed || e); });
+      })();
+    });
+  }
+
+  /*
+   * MediaRecorder path: plays the replay in real time, since the recorder
+   * stamps frames by the wall clock, then writes the length it never writes.
+   */
+  function recordRealtime(job, mime, frames, draw, canvas, progress, duration) {
+    return new Promise(function (resolve) {
+      var chunks = [];
+      var rec = new global.MediaRecorder(canvas.captureStream(VIDEO_FPS), { mimeType: mime, videoBitsPerSecond: VIDEO_BPS });
+      rec.ondataavailable = function (ev) { if (ev.data && ev.data.size) chunks.push(ev.data); };
+      job.stop = function () { if (rec.state !== 'inactive') rec.stop(); };
+      rec.onstop = function () {
+        if (job.cancelled) { resolve(null); return; }
+        var raw = new Blob(chunks, { type: 'video/webm' });
+        var HEAD = 4096;
+        raw.slice(0, HEAD).arrayBuffer().then(function (buf) {
+          // without a length players cannot seek; if the header is not one we
+          // know how to patch, the file still plays, just without it
+          var head = R.webmWithDuration(new Uint8Array(buf), duration);
+          resolve(head ? new Blob([head, raw.slice(HEAD)], { type: 'video/webm' }) : raw);
+        });
+      };
+      draw(0);
+      rec.start(1000);
+      var t0 = performance.now();
+      (function tick() {
+        if (job.cancelled || rec.state !== 'recording') return;
+        var t = (performance.now() - t0) / 1000;
+        draw(Math.min(Math.round(t * VIDEO_FPS), frames - 1));
+        progress('recording the last run · ' + Math.min(t, duration).toFixed(0) + ' / ' + duration.toFixed(0) + ' s');
+        // one frame past the end, so the recorder holds the final pose
+        if (t > duration + 1 / VIDEO_FPS) { rec.stop(); return; }
+        requestAnimationFrame(tick);
+      })();
+    });
+  }
+
+  /* One replay frame at `t` s into the clip: the blended pose through the live renderer, plus a canvas HUD. */
+  Game.prototype.drawVideoFrame = function (view, cl, t) {
+    var f = R.poseAt(cl, t), idx = R.frameIndex(cl, t), g = view.ctx;
     view.bike = { x: f.x, y: f.y, angle: f.a, wheelSpin: f.w, vx: f.vx, crashed: f.cr, finished: f.fi };
     view.cam = { x: f.cx, y: f.cy };
     view.input = { throttle: f.th };
     view.riderLean = f.l;
     view.trail = R.trailAt(cl, idx);
+    view.trail.push({ x: f.x, y: f.y });
     view.drawWorld(g);
 
     // the live sky is CSS behind the canvas; a video has to paint its own

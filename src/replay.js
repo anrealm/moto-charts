@@ -67,6 +67,29 @@
     return lo;
   }
 
+  var LERPED = ['t', 'x', 'y', 'a', 'w', 'vx', 'cx', 'cy', 'l'];
+
+  /*
+   * The pose `t` seconds into the clip, blended between the two logged frames
+   * around it. The live game draws at whatever rate the display runs; a video
+   * has a fixed one, and picking the nearest logged frame instead of blending
+   * made motion visibly uneven. Angle and wheel spin accumulate without
+   * wrapping, so a plain blend is right for them too. Discrete fields (crash,
+   * finish, flips, throttle) come from the earlier frame.
+   */
+  function poseAt(cl, t) {
+    var i = frameIndex(cl, t), fr = cl.frames, a = fr[i], b = fr[i + 1];
+    var out = {};
+    for (var k in a) out[k] = a[k];
+    if (!b || b.c <= a.c) return out;
+    var u = Math.min(1, Math.max(0, (cl.start + t - a.c) / (b.c - a.c)));
+    for (var j = 0; j < LERPED.length; j++) {
+      var f = LERPED[j];
+      out[f] = a[f] + (b[f] - a[f]) * u;
+    }
+    return out;
+  }
+
   function trailAt(cl, idx) {
     var out = [];
     for (var i = Math.max(0, idx - TRAIL_FRAMES + 1); i <= idx; i++) {
@@ -86,6 +109,115 @@
   }
 
   /* ------------------------------------------------------------ WebM */
+
+  function idBytes(id) {
+    var out = [];
+    while (id > 0) { out.unshift(id & 0xff); id = Math.floor(id / 256); }
+    return out;
+  }
+
+  function sizeBytes(v, len) {
+    if (!len) { len = 1; while (v >= Math.pow(2, 7 * len) - 1) len++; }
+    var out = new Array(len);
+    for (var k = len - 1; k > 0; k--) { out[k] = v % 256; v = Math.floor(v / 256); }
+    out[0] = (0x80 >> (len - 1)) | v;
+    return out;
+  }
+
+  function uintBytes(v, len) {
+    var out = [];
+    do { out.unshift(v % 256); v = Math.floor(v / 256); } while (v > 0);
+    while (len && out.length < len) out.unshift(0);
+    return out;
+  }
+
+  function concat(parts) {
+    var n = 0, i;
+    for (i = 0; i < parts.length; i++) n += parts[i].length;
+    var out = new Uint8Array(n), at = 0;
+    for (i = 0; i < parts.length; i++) { out.set(parts[i], at); at += parts[i].length; }
+    return out;
+  }
+
+  /* One EBML element; `body` is bytes or an array of already built children. */
+  function elem(id, body, sizeLen) {
+    if (Array.isArray(body) && body.length && typeof body[0] !== 'number') body = concat(body);
+    body = body instanceof Uint8Array ? body : new Uint8Array(body);
+    return concat([new Uint8Array(idBytes(id)), new Uint8Array(sizeBytes(body.length, sizeLen)), body]);
+  }
+
+  function text(str) {
+    var out = [];
+    for (var i = 0; i < str.length; i++) out.push(str.charCodeAt(i) & 0x7f);
+    return out;
+  }
+
+  /*
+   * Packs encoded video frames into a WebM file. `frames` = [{data, ms, key}],
+   * in order; `codec` is 'V_VP9' or 'V_VP8'. A cluster starts at every key
+   * frame (and at least every 30 s, the reach of a block's 16-bit offset);
+   * Cues index the clusters so players can seek, and the header carries the
+   * duration.
+   */
+  function webmMux(o) {
+    var tracks = elem(0x1654AE6B, [elem(0xAE, [
+      elem(0xD7, [1]),                      // TrackNumber
+      elem(0x73C5, [1]),                    // TrackUID
+      elem(0x83, [1]),                      // TrackType: video
+      elem(0x86, text(o.codec)),            // CodecID
+      elem(0xE0, [                          // Video
+        elem(0xB0, uintBytes(o.width)),
+        elem(0xBA, uintBytes(o.height))
+      ])
+    ])]);
+    var dur = new Uint8Array(8);
+    new DataView(dur.buffer).setFloat64(0, o.durationMs);
+    var info = elem(0x1549A966, [
+      elem(0x2AD7B1, uintBytes(1000000)),   // TimecodeScale: 1 ms
+      elem(0x4489, dur),
+      elem(0x4D80, text('moto-charts')),
+      elem(0x5741, text('moto-charts'))
+    ]);
+
+    var clusters = [], cueAt = [], cur = null;
+    o.frames.forEach(function (f) {
+      if (!cur || f.key || f.ms - cur.ms > 30000) {
+        if (cur) clusters.push(cur);
+        cur = { ms: f.ms, blocks: [] };
+      }
+      var rel = f.ms - cur.ms;
+      cur.blocks.push(elem(0xA3, concat([      // SimpleBlock
+        new Uint8Array([0x81, (rel >> 8) & 0xff, rel & 0xff, f.key ? 0x80 : 0]),
+        f.data
+      ])));
+    });
+    if (cur) clusters.push(cur);
+    clusters = clusters.map(function (c) {
+      return { ms: c.ms, bytes: elem(0x1F43B675, [elem(0xE7, uintBytes(c.ms))].concat(c.blocks)) };
+    });
+
+    // SeekHead positions are fixed-width, so its size is known before they are
+    function seekHead(infoPos, tracksPos, cuesPos) {
+      function entry(id, pos) {
+        return elem(0x4DBB, [elem(0x53AB, idBytes(id)), elem(0x53AC, uintBytes(pos, 4))]);
+      }
+      return elem(0x114D9B74, [entry(0x1549A966, infoPos), entry(0x1654AE6B, tracksPos), entry(0x1C53BB6B, cuesPos)]);
+    }
+    var headLen = seekHead(0, 0, 0).length;
+    var pos = headLen + info.length + tracks.length;
+    clusters.forEach(function (c) { cueAt.push({ ms: c.ms, pos: pos }); pos += c.bytes.length; });
+    var cues = elem(0x1C53BB6B, cueAt.map(function (c) {
+      return elem(0xBB, [elem(0xB3, uintBytes(c.ms)), elem(0xB7, [elem(0xF7, [1]), elem(0xF1, uintBytes(c.pos))])]);
+    }));
+    var head = seekHead(headLen, headLen + info.length, pos);
+
+    var body = concat([head, info, tracks].concat(clusters.map(function (c) { return c.bytes; })).concat([cues]));
+    var ebml = elem(0x1A45DFA3, [
+      elem(0x4286, [1]), elem(0x42F7, [1]), elem(0x42F2, [4]), elem(0x42F3, [8]),
+      elem(0x4282, text('webm')), elem(0x4287, [2]), elem(0x4285, [2])
+    ]);
+    return concat([ebml, elem(0x18538067, body, 8)]);
+  }
 
   var ID_SEGMENT = 0x18538067, ID_SEEKHEAD = 0x114D9B74, ID_INFO = 0x1549A966;
   var ID_SCALE = 0x2AD7B1, ID_DURATION = 0x4489;
@@ -190,6 +322,8 @@
 
   return {
     webmWithDuration: webmWithDuration,
+    webmMux: webmMux,
+    poseAt: poseAt,
     MAX_SECONDS: MAX_SECONDS,
     TAIL_SECONDS: TAIL_SECONDS,
     createLog: createLog,
