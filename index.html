@@ -92,6 +92,7 @@
 
 <script src="src/physics.js"></script>
 <script src="src/track.js"></script>
+<script src="src/replay.js"></script>
 <script src="src/game.js"></script>
 <script>
 (function () {
@@ -413,6 +414,18 @@
       crashed: game.bike.crashed, crashKind: MotoPhysics.crashKind(game.bike), finished: game.bike.finished,
       time: +game.time.toFixed(2), trackPts: game.terrain.points.length
     };
+    // &video=1 records the simulated run the way V does, and reports the file
+    // instead of downloading it: a headless check of the whole video path
+    if (/[?&]video=1/.test(location.search)) {
+      game.saveVideo({ download: false }).then(function (blob) {
+        if (!blob) { window.__video = { error: 'no video' }; return; }
+        var fr = new FileReader();
+        fr.onload = function () {
+          window.__video = { size: blob.size, type: blob.type, dataUrl: fr.result };
+        };
+        fr.readAsDataURL(blob);
+      }, function (e) { window.__video = { error: String(e) }; });
+    }
   }
 })();
 </script>

@@ -14,6 +14,7 @@ import path from 'node:path';
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const physics = fs.readFileSync(path.join(dir, '../src/physics.js'), 'utf8');
 const track = fs.readFileSync(path.join(dir, '../src/track.js'), 'utf8');
+const replay = fs.readFileSync(path.join(dir, '../src/replay.js'), 'utf8');
 const game = fs.readFileSync(path.join(dir, '../src/game.js'), 'utf8');
 
 function load(makeWindow) {
@@ -22,6 +23,7 @@ function load(makeWindow) {
   makeWindow(ctx);
   vm.runInContext(physics, ctx);
   vm.runInContext(track, ctx);
+  vm.runInContext(replay, ctx);
   vm.runInContext(game, ctx);
   return ctx;
 }
@@ -30,6 +32,7 @@ test('loads when window is a separate object (Firefox content script)', () => {
   const ctx = load((c) => { vm.runInContext('this.window = { notTheGlobal: true };', c); });
   assert.equal(vm.runInContext('typeof globalThis.MotoPhysics', ctx), 'object');
   assert.equal(vm.runInContext('typeof globalThis.MotoTrack', ctx), 'object');
+  assert.equal(vm.runInContext('typeof globalThis.MotoReplay', ctx), 'object');
   assert.equal(vm.runInContext('typeof globalThis.MotoCharts', ctx), 'object',
     'game.js must publish where the injector can find it');
   assert.equal(vm.runInContext('typeof globalThis.MotoCharts.start', ctx), 'function');
