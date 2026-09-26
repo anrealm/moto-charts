@@ -78,10 +78,11 @@ to ride.
 | `1` `2` `3` | track mode, see below |
 | `R` | restart |
 | `P` | pause |
+| `E` | save the track to a file, see below |
 | `Esc` | quit; the page is left exactly as it was |
 
 Every letter key also answers on a Cyrillic layout (`ц ы ф в к з`), so the
-controls work without switching layouts.
+controls work without switching layouts (`у` for `E`).
 
 Touching the ground with the rider's head is a crash. Best lap times go to
 `localStorage`, kept separately per line, per page and per mode. Switching mode
@@ -135,6 +136,26 @@ The asymmetry is deliberate: **climbs and descents are capped differently.** You
 can fall off a cliff — that is a flight and a trick; you can only stall against a
 wall. Climbs get a tight ceiling; descents get a loose one (4.0, about 76°) that
 exists only to keep the terrain a function of x rather than an overhang.
+
+## Your own tracks
+
+The [demo page](https://anrealm.github.io/moto-charts/) rides tracks that did not
+come from a chart on that page:
+
+* **Numbers.** Paste values into the box. Either one series (`12 18 25 9 4`, any
+  mix of spaces, commas, semicolons, one per line — all the same) or one `x, y`
+  pair per line. Decimals take a dot, since a comma is always a separator. Words and dates
+  drop out, so two columns copied from a spreadsheet — a date and a value — ride as
+  the values. The numbers are fitted to a chart-sized box, higher value = higher
+  ground, and the track modes apply as usual.
+* **Track files.** `E` during a ride saves the line as `moto-track-<id>.json`: the
+  points and the line colour, nothing about the page it came from — no address, no
+  title. The demo's **Load track file** rides it.
+* **Links.** Whatever the demo rides lands in its address as `#t=…`, so the
+  address bar is the link; **Copy link to this track** copies it. A 2000-point line comes to
+  about 5 KB of URL. No server is involved: the track lives in the link itself.
+
+Each track keeps its own lap records, keyed by an id derived from its points.
 
 ## Tricks
 
@@ -263,7 +284,7 @@ open "test/bench.html"        # individual canvas operations
 No dependencies, no build tooling beyond a shell script.
 
 ```bash
-node --test test/physics.test.mjs test/sandbox.test.mjs   # 32 tests
+node --test test/*.test.mjs   # 45 tests
 ./build.sh                  # src/ + extension/ -> dist/
 node tools/make-icons.js    # redraw icons (only when the artwork changes)
 open index.html             # local demo page with an SVG chart
@@ -273,6 +294,7 @@ open index.html             # local demo page with an SVG chart
 
 * `src/physics.js` — terrain, track pipeline, bike physics. DOM-free, so it runs
   under node.
+* `src/track.js` — typed-in numbers, track files and share links. DOM-free.
 * `src/game.js` — line discovery, picker, rendering, input.
 * `extension/` — the shell: popup, shortcut, injection. Two manifests,
   `manifest.firefox.json` (background scripts) and `manifest.chrome.json`
@@ -307,9 +329,11 @@ Headless frame capture:
 * The `.xpi` — installed into a throwaway Firefox Developer Edition profile;
   the browser accepted it as MV3 with `active: true`, `appDisabled: false`.
 * Loading inside a Firefox content-script sandbox — 3 tests in
-  `test/sandbox.test.mjs`, see below. 32 in total.
-* **Not verified by clicking**: the popup and the keyboard shortcut. Headless
-  cannot press them.
+  `test/sandbox.test.mjs`, see below.
+* Number parsing, track files and links — 13 tests in `test/track.test.mjs`.
+  45 in total.
+* **Not verified by clicking**: the popup, the keyboard shortcut, the `E`
+  download and the demo's file picker. Headless cannot press them.
 * If a chart lives in a cross-origin iframe, `activeTab` cannot reach it. The
   extension says so; opening the chart in its own tab works. For diagnostics use
   the popup's "what was found on the page" button, or `MotoCharts._collectPaths()`
