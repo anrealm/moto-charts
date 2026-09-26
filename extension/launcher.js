@@ -8,7 +8,7 @@
 /* global chrome, browser */
 var motoApi = (typeof browser !== 'undefined' && browser.scripting) ? browser : chrome;
 
-var MOTO_FILES = ['content/physics.js', 'content/track.js', 'content/game.js'];
+var MOTO_FILES = ['content/physics.js', 'content/track.js', 'content/replay.js', 'content/game.js'];
 
 /*
  * Runs inside the page. Must be self-contained — it is serialised and injected,

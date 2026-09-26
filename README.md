@@ -79,10 +79,11 @@ to ride.
 | `R` | restart |
 | `P` | pause |
 | `E` | save the track to a file, see below |
+| `V` | save a video of the last run, see below |
 | `Esc` | quit; the page is left exactly as it was |
 
 Every letter key also answers on a Cyrillic layout (`ц ы ф в к з`), so the
-controls work without switching layouts (`у` for `E`).
+controls work without switching layouts (`у` for `E`, `м` for `V`).
 
 Touching the ground with the rider's head is a crash. Best lap times go to
 `localStorage`, kept separately per line, per page and per mode. Switching mode
@@ -156,6 +157,35 @@ come from a chart on that page:
   about 5 KB of URL. No server is involved: the track lives in the link itself.
 
 Each track keeps its own lap records, keyed by an id derived from its points.
+
+## Videos of a run
+
+After a crash or a finish, `V` saves that run as a video, `moto-ride-<id>.webm`.
+Nothing has to be started in advance: the game logs every drawn frame — the
+bike pose and the camera — and the video replays that log. It never re-runs the
+physics, whose step follows the frame time and would drift away from what was
+actually ridden. `R` does not lose the run: until the next one ends, `V` still
+saves the previous one.
+
+* 1280×720, 60 fps, WebM (VP9 where the browser has it, else VP8), bitrate
+  capped at 4 Mbit/s — a full minute is at most about 30 MB.
+* At most the last 60 seconds of the run, plus 1.5 s after the crash or finish.
+* The video carries its own HUD — time, flips, the CRASHED / FINISH line and a
+  small `moto-charts` mark — drawn into the frame, since the live HUD is HTML
+  on top of the canvas.
+* Poses are blended between logged frames, so the video runs at a steady 60 fps
+  whatever rate the game was drawn at.
+* Where WebCodecs exists (https pages in current Chrome and Firefox), each frame
+  goes to the encoder with an exact timestamp and the game packs the output into
+  WebM itself, faster than real time: a 15 s run took 8 s in Firefox 156 on a Mac.
+  Elsewhere — http pages, older browsers, or an encoder that says it is supported
+  and then refuses — `MediaRecorder` records the replay as it plays, which takes
+  as long as the clip and may come out under 60 fps. A preview plays either way;
+  `Esc` cancels.
+* `MediaRecorder` never writes the length into the file, and players cannot seek
+  a WebM without it, so on that path the game writes it into the header.
+* Chrome and Firefox record; a browser without WebM recording (Safari) says so
+  instead.
 
 ## Tricks
 
@@ -284,7 +314,7 @@ open "test/bench.html"        # individual canvas operations
 No dependencies, no build tooling beyond a shell script.
 
 ```bash
-node --test test/*.test.mjs   # 45 tests
+node --test test/*.test.mjs   # 58 tests
 ./build.sh                  # src/ + extension/ -> dist/
 node tools/make-icons.js    # redraw icons (only when the artwork changes)
 open index.html             # local demo page with an SVG chart
@@ -295,6 +325,8 @@ open index.html             # local demo page with an SVG chart
 * `src/physics.js` — terrain, track pipeline, bike physics. DOM-free, so it runs
   under node.
 * `src/track.js` — typed-in numbers, track files and share links. DOM-free.
+* `src/replay.js` — the run log behind videos, pose blending, a WebM muxer and
+  the length fix for `MediaRecorder` output. DOM-free.
 * `src/game.js` — line discovery, picker, rendering, input.
 * `extension/` — the shell: popup, shortcut, injection. Two manifests,
   `manifest.firefox.json` (background scripts) and `manifest.chrome.json`
@@ -308,7 +340,10 @@ open index.html             # local demo page with an SVG chart
   track on autopilot and renders the frame immediately, which makes headless
   screenshots useful; `&policy=gas` rides it throttle-only instead, the way a
   newcomer does, which is the quick route to a crash screen. Other query flags:
-  `?mode=<name>`, `?perf=1`, `?keytest=1`, `?colorcheck=1`.
+  `?mode=<name>`, `?perf=1`, `?keytest=1`, `?colorcheck=1`. `&video=1` next to
+  `?auto=` records the simulated run the way `V` does and leaves the file in
+  `window.__video` instead of downloading it; `&method=recorder` forces the
+  `MediaRecorder` path.
 * `test/bundle-check.html` — checks the built artifact rather than the sources.
 * `test/color-cases.html` — every convention for specifying a line colour.
 
@@ -331,9 +366,16 @@ Headless frame capture:
 * Loading inside a Firefox content-script sandbox — 3 tests in
   `test/sandbox.test.mjs`, see below.
 * Number parsing, track files and links — 13 tests in `test/track.test.mjs`.
-  45 in total.
-* **Not verified by clicking**: the popup, the keyboard shortcut, the `E`
-  download and the demo's file picker. Headless cannot press them.
+* Run log, pose blending, the muxer and the WebM length fix — 13 tests in
+  `test/replay.test.mjs`, against headers recorded by Chromium and Firefox
+  (`test/fixtures/`). 58 in total.
+* Video recording end to end — `index.html?auto=…&video=1`, both paths, in
+  Chromium and Firefox under Playwright and in Firefox 156 on a Mac: the files
+  decode fully with ffmpeg, report their length, seek, and the WebCodecs ones
+  hold exactly 60 frames per second.
+* **Not verified by clicking**: the popup, the keyboard shortcut, the `E` and
+  `V` downloads inside the installed extension, and the demo's file picker.
+  Headless cannot press them.
 * If a chart lives in a cross-origin iframe, `activeTab` cannot reach it. The
   extension says so; opening the chart in its own tab works. For diagnostics use
   the popup's "what was found on the page" button, or `MotoCharts._collectPaths()`

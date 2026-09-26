@@ -21,6 +21,8 @@
   if (!P) throw new Error('moto-charts: physics core must be loaded first');
   var T = global.MotoTrack;
   if (!T) throw new Error('moto-charts: track codec must be loaded first');
+  var R = global.MotoReplay;
+  if (!R) throw new Error('moto-charts: run log must be loaded first');
 
   var Z = 2147483000;
   var STORE_KEY = 'moto-charts:best';
@@ -50,6 +52,11 @@
 
   /* [width in screen px, alpha] — outermost first, stacked under the solid line */
   var GLOW = [[20, 0.07], [12, 0.13], [6, 0.26]];
+
+  // video of a run: 720p60, bitrate capped so a full minute stays around 30 MB
+  var VIDEO_W = 1280, VIDEO_H = 720, VIDEO_FPS = 60, VIDEO_BPS = 4000000;
+  var VIDEO_TYPES = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  var VIDEO_HINT = '<div style="margin-top:6px;font-size:13px;opacity:.7"><b>V</b> saves a video of this run</div>';
 
   /* ---------------------------------------------------------------- helpers */
 
@@ -402,7 +409,7 @@
     this.help.innerHTML =
       '<b>↑</b> throttle &nbsp; <b>↓</b> reverse &nbsp; <b>Space</b> brake &nbsp; <b>←/→</b> lean<br>' +
       '<b>1</b> as drawn &nbsp; <b>2</b> rideable &nbsp; <b>3</b> mellow<br>' +
-      '<b>R</b> restart &nbsp; <b>P</b> pause &nbsp; <b>E</b> save track &nbsp; <b>Esc</b> quit';
+      '<b>R</b> restart &nbsp; <b>P</b> pause &nbsp; <b>E</b> save track &nbsp; <b>V</b> video of last run &nbsp; <b>Esc</b> quit';
 
     if (this.opts.track) {
       // explicit track options bypass the presets entirely
@@ -432,8 +439,11 @@
       var frame = t - self.last;
       var dt = Math.min(frame / 1000, 0.1);
       self.last = t;
-      if (!self.paused) self.update(dt);
-      self.render();
+      // while a video renders the live frame is hidden behind it; skip the work
+      if (!self.recording) {
+        if (!self.paused) self.update(dt);
+        self.render();
+      }
 
       // Smoothed frame time; if the machine cannot keep up, shed quality once
       // rather than stuttering forever.
@@ -460,6 +470,9 @@
   };
 
   Game.prototype.reset = function () {
+    // "the last run" survives a restart until the new one ends
+    if (R.ended(this.log)) this.lastRun = this.log;
+    this.log = R.createLog();
     this.bike = P.createBike(this.terrain, this.cfg);
     this.time = 0;
     this.attempts++;
@@ -496,10 +509,18 @@
 
   Game.prototype.key = function (e, down) {
     var k = e.key;
+    if (this.recording) {
+      // the page must not see keys while the video renders; Esc cancels it
+      if (down && k === 'Escape') this.cancelVideo();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (down && k === 'Escape') { this.destroy(); e.preventDefault(); return; }
     if (down && (k === 'r' || k === 'R' || k === 'к' || k === 'К')) { this.reset(); e.preventDefault(); return; }
     if (down && (k === 'p' || k === 'P' || k === 'з' || k === 'З')) { this.paused = !this.paused; e.preventDefault(); return; }
     if (down && (k === 'e' || k === 'E' || k === 'у' || k === 'У')) { this.exportTrack(); e.preventDefault(); return; }
+    if (down && (k === 'v' || k === 'V' || k === 'м' || k === 'М')) { this.saveVideo(); e.preventDefault(); return; }
     if (down && (k === '1' || k === '2' || k === '3')) {
       this.setMode(P.MODE_ORDER[parseInt(k, 10) - 1]);
       e.preventDefault();
@@ -553,13 +574,13 @@
         if (this.best == null || this.time < this.best) {
           this.best = this.time;
           this.saveBest(this.time);
-          this.showBanner('FINISH', this.time.toFixed(2) + ' s — new record', '#7ee787');
+          this.showBanner('FINISH', this.time.toFixed(2) + ' s — new record' + VIDEO_HINT, '#7ee787');
         } else {
-          this.showBanner('FINISH', this.time.toFixed(2) + ' s · record ' + this.best.toFixed(2) + ' s', '#7ee787');
+          this.showBanner('FINISH', this.time.toFixed(2) + ' s · record ' + this.best.toFixed(2) + ' s' + VIDEO_HINT, '#7ee787');
         }
       } else if (b.crashed) {
         this.showBanner('CRASHED', '<div style="margin-bottom:8px">' + this.crashTip(P.crashKind(b)) + '</div>' +
-          '<b>R</b> to try again', '#f97583');
+          '<b>R</b> to try again' + VIDEO_HINT, '#f97583');
       }
 
       this.coachLean(b, dt);
@@ -596,6 +617,12 @@
 
     this.trail.push({ x: b.x, y: b.y });
     if (this.trail.length > 90) this.trail.shift();
+
+    R.push(this.log, {
+      c: this.clock, t: this.time, x: b.x, y: b.y, a: b.angle, w: b.wheelSpin, vx: b.vx,
+      cx: this.cam.x, cy: this.cam.y, l: this.riderLean, th: this.input.throttle,
+      n: b.flips, cr: b.crashed, fi: b.finished
+    });
   };
 
   Game.prototype.crashTip = function (kind) {
@@ -640,14 +667,257 @@
    * its title.
    */
   Game.prototype.exportTrack = function () {
-    var url = URL.createObjectURL(new Blob([T.toFile(this.source)], { type: 'application/json' }));
+    this.download(new Blob([T.toFile(this.source)], { type: 'application/json' }),
+      'moto-track-' + T.trackId(this.source.points) + '.json');
+    this.showToast('TRACK SAVED');
+  };
+
+  /* ------------------------------------------------------------- video */
+
+  /*
+   * Renders the last finished or crashed run into a WebM and downloads it.
+   * The replay draws logged poses, blended to a steady 60 fps, into its own
+   * 720p canvas. Where WebCodecs exists (https pages in current Chrome and
+   * Firefox) frames go to the encoder one by one with exact timestamps, faster
+   * than real time; elsewhere MediaRecorder records the canvas as it plays,
+   * which takes as long as the clip. Resolves with the Blob, or null when there
+   * is nothing to record, it failed, or it was cancelled.
+   * `opts.method` ('encoder' / 'recorder') forces a path, for tests.
+   */
+  Game.prototype.saveVideo = function (opts) {
+    opts = opts || {};
+    if (this.recording) return this.recording.promise;
+    var log = R.ended(this.log) ? this.log : this.lastRun;
+    if (!R.ended(log)) { this.showToast('FINISH OR CRASH FIRST'); return Promise.resolve(null); }
+
+    var self = this, cl = R.clip(log);
+    var canvas = el('canvas', 'position:absolute;left:50%;top:46%;transform:translate(-50%,-50%);' +
+      'width:min(72vw,960px);border:1px solid #30363d;border-radius:10px;box-shadow:0 12px 40px #000c', this.root);
+    canvas.width = VIDEO_W;
+    canvas.height = VIDEO_H;
+    var label = el('div', 'position:absolute;left:50%;bottom:9%;transform:translateX(-50%);' +
+      'font-size:14px;opacity:.85;text-shadow:0 1px 3px #000;white-space:nowrap', this.root);
+    var view = Object.create(this);
+    view.ctx = canvas.getContext('2d');
+    view.w = VIDEO_W;
+    view.h = VIDEO_H;
+    view.glow = true;
+
+    var bannerShown = this.banner.style.display;
+    this.banner.style.display = 'none';
+    var job = this.recording = { cancelled: false, stop: null };
+    var frames = Math.floor(cl.duration * VIDEO_FPS) + 1;
+    var draw = function (i) { self.drawVideoFrame(view, cl, Math.min(i / VIDEO_FPS, cl.duration)); };
+    var progress = function (text) { label.innerHTML = text + ' &nbsp;·&nbsp; <b>Esc</b> cancels'; };
+
+    function realtime() {
+      var mime = opts.method === 'encoder' ? null : recorderType(canvas);
+      if (!mime) { self.showToast('NO VIDEO IN THIS BROWSER'); return null; }
+      self.lastVideoMethod = 'recorder';
+      return recordRealtime(job, mime, frames, draw, canvas, progress, cl.duration);
+    }
+    job.promise = pickEncoder(opts.method).then(function (enc) {
+      if (!enc) return realtime();
+      self.lastVideoMethod = 'encoder';
+      return encodeFast(job, enc, frames, draw, canvas, progress).then(null, function (e) {
+        // isConfigSupported can say yes and encode() still refuse (seen in
+        // Firefox builds without the encoder), so a failed encoder falls back
+        if (job.cancelled) return null;
+        if (global.console) console.warn('moto-charts: encoder failed, recording in real time instead', e);
+        job.stop = null;
+        return realtime();
+      });
+    }).then(null, function (e) {
+      self.showToast('VIDEO FAILED');
+      if (global.console) console.warn('moto-charts: video failed', e);
+      return null;
+    }).then(function (blob) {
+      canvas.remove();
+      label.remove();
+      self.banner.style.display = bannerShown;
+      self.recording = null;
+      // key releases were swallowed while recording; nothing may stay held
+      self.keys = {};
+      self.readInput();
+      if (!blob || job.cancelled) return null;
+      if (opts.download !== false) {
+        self.download(blob, 'moto-ride-' + T.trackId(self.source.points) + '.webm');
+        self.showToast('VIDEO SAVED');
+      }
+      return blob;
+    });
+    return job.promise;
+  };
+
+  Game.prototype.cancelVideo = function () {
+    if (!this.recording) return;
+    this.recording.cancelled = true;
+    if (this.recording.stop) this.recording.stop();
+  };
+
+  var ENCODERS = [{ codec: 'vp09.00.10.08', mux: 'V_VP9' }, { codec: 'vp8', mux: 'V_VP8' }];
+
+  /* First WebCodecs config this browser can encode, or null. */
+  function pickEncoder(method) {
+    if (method === 'recorder' || !global.VideoEncoder || !global.VideoFrame) return Promise.resolve(null);
+    var i = 0;
+    function next() {
+      if (i >= ENCODERS.length) return null;
+      var e = ENCODERS[i++];
+      // 'realtime' runs libvpx at its fast settings: measured in Firefox 156 on
+      // a Mac, VP9 went from 0.8x to 3.3x real time, at the same bitrate
+      var cfg = { codec: e.codec, width: VIDEO_W, height: VIDEO_H, bitrate: VIDEO_BPS, framerate: VIDEO_FPS, latencyMode: 'realtime' };
+      return global.VideoEncoder.isConfigSupported(cfg).then(function (r) {
+        return r.supported ? { cfg: cfg, mux: e.mux } : next();
+      }, next);
+    }
+    return Promise.resolve(next());
+  }
+
+  function recorderType(canvas) {
+    var Rec = global.MediaRecorder;
+    if (!Rec || !canvas.captureStream) return null;
+    return VIDEO_TYPES.filter(function (m) { return Rec.isTypeSupported(m); })[0] || null;
+  }
+
+  /*
+   * WebCodecs path: draw frame i, hand it to the encoder stamped i/60 s, and
+   * pack the output into WebM ourselves. Works in slices so the page keeps
+   * painting the preview, and waits whenever the encoder queue backs up.
+   */
+  function encodeFast(job, enc, frames, draw, canvas, progress) {
+    return new Promise(function (resolve, reject) {
+      var out = [], failed = null;
+      var encoder = new global.VideoEncoder({
+        output: function (chunk) {
+          var data = new Uint8Array(chunk.byteLength);
+          chunk.copyTo(data);
+          out.push({ data: data, ms: Math.round(chunk.timestamp / 1000), key: chunk.type === 'key' });
+        },
+        error: function (e) { failed = e; }
+      });
+      encoder.configure(enc.cfg);
+      job.stop = function () { try { encoder.close(); } catch (e) {} };
+      var i = 0, step = 1e6 / VIDEO_FPS;
+      (function slice() {
+        if (job.cancelled) { resolve(null); return; }
+        if (failed) { reject(failed); return; }
+        var until = performance.now() + 24;
+        while (i < frames && encoder.encodeQueueSize < 8 && performance.now() < until) {
+          draw(i);
+          var vf = new global.VideoFrame(canvas, { timestamp: Math.round(i * step), duration: Math.round(step) });
+          // a key frame every 2 s keeps seeking cheap
+          encoder.encode(vf, { keyFrame: i % (VIDEO_FPS * 2) === 0 });
+          vf.close();
+          i++;
+        }
+        progress('rendering the last run · ' + Math.round(100 * i / frames) + '%');
+        if (i < frames) { setTimeout(slice, 0); return; }
+        encoder.flush().then(function () {
+          encoder.close();
+          if (job.cancelled) { resolve(null); return; }
+          resolve(new Blob([R.webmMux({
+            codec: enc.mux, width: VIDEO_W, height: VIDEO_H,
+            durationMs: frames * 1000 / VIDEO_FPS, frames: out
+          })], { type: 'video/webm' }));
+        }, function (e) { if (job.cancelled) resolve(null); else reject(failed || e); });
+      })();
+    });
+  }
+
+  /*
+   * MediaRecorder path: plays the replay in real time, since the recorder
+   * stamps frames by the wall clock, then writes the length it never writes.
+   */
+  function recordRealtime(job, mime, frames, draw, canvas, progress, duration) {
+    return new Promise(function (resolve) {
+      var chunks = [];
+      var rec = new global.MediaRecorder(canvas.captureStream(VIDEO_FPS), { mimeType: mime, videoBitsPerSecond: VIDEO_BPS });
+      rec.ondataavailable = function (ev) { if (ev.data && ev.data.size) chunks.push(ev.data); };
+      job.stop = function () { if (rec.state !== 'inactive') rec.stop(); };
+      rec.onstop = function () {
+        if (job.cancelled) { resolve(null); return; }
+        var raw = new Blob(chunks, { type: 'video/webm' });
+        var HEAD = 4096;
+        raw.slice(0, HEAD).arrayBuffer().then(function (buf) {
+          // without a length players cannot seek; if the header is not one we
+          // know how to patch, the file still plays, just without it
+          var head = R.webmWithDuration(new Uint8Array(buf), duration);
+          resolve(head ? new Blob([head, raw.slice(HEAD)], { type: 'video/webm' }) : raw);
+        });
+      };
+      draw(0);
+      rec.start(1000);
+      var t0 = performance.now();
+      (function tick() {
+        if (job.cancelled || rec.state !== 'recording') return;
+        var t = (performance.now() - t0) / 1000;
+        draw(Math.min(Math.round(t * VIDEO_FPS), frames - 1));
+        progress('recording the last run · ' + Math.min(t, duration).toFixed(0) + ' / ' + duration.toFixed(0) + ' s');
+        // one frame past the end, so the recorder holds the final pose
+        if (t > duration + 1 / VIDEO_FPS) { rec.stop(); return; }
+        requestAnimationFrame(tick);
+      })();
+    });
+  }
+
+  /* One replay frame at `t` s into the clip: the blended pose through the live renderer, plus a canvas HUD. */
+  Game.prototype.drawVideoFrame = function (view, cl, t) {
+    var f = R.poseAt(cl, t), idx = R.frameIndex(cl, t), g = view.ctx;
+    view.bike = { x: f.x, y: f.y, angle: f.a, wheelSpin: f.w, vx: f.vx, crashed: f.cr, finished: f.fi };
+    view.cam = { x: f.cx, y: f.cy };
+    view.input = { throttle: f.th };
+    view.riderLean = f.l;
+    view.trail = R.trailAt(cl, idx);
+    view.trail.push({ x: f.x, y: f.y });
+    view.drawWorld(g);
+
+    // the live sky is CSS behind the canvas; a video has to paint its own
+    g.save();
+    g.globalCompositeOperation = 'destination-over';
+    var sky = g.createLinearGradient(0, 0, 0, VIDEO_H);
+    sky.addColorStop(0, '#0a0f1c');
+    sky.addColorStop(1, '#05070d');
+    g.fillStyle = sky;
+    g.fillRect(0, 0, VIDEO_W, VIDEO_H);
+    g.restore();
+
+    g.save();
+    g.shadowColor = '#000';
+    g.shadowBlur = 6;
+    g.fillStyle = '#e6edf3';
+    g.textBaseline = 'top';
+    g.font = '800 40px ui-monospace,SFMono-Regular,Menlo,monospace';
+    g.fillText(f.t.toFixed(2) + ' s', 28, 24);
+    g.font = '600 18px ui-sans-serif,system-ui,sans-serif';
+    g.globalAlpha = 0.75;
+    g.fillText('flips ' + f.n, 30, 74);
+    g.textAlign = 'right';
+    g.globalAlpha = 0.45;
+    g.fillText('moto-charts', VIDEO_W - 26, VIDEO_H - 40);
+    g.globalAlpha = 1;
+    g.textAlign = 'center';
+    if (R.sinceFlip(cl, idx) < 1.2) {
+      g.fillStyle = '#ffd479';
+      g.font = '800 44px ui-sans-serif,system-ui,sans-serif';
+      g.fillText('FLIP', VIDEO_W / 2, VIDEO_H * 0.18);
+    }
+    if (f.cr || f.fi) {
+      g.fillStyle = f.cr ? '#f97583' : '#7ee787';
+      g.font = '800 60px ui-sans-serif,system-ui,sans-serif';
+      g.fillText(f.cr ? 'CRASHED' : 'FINISH', VIDEO_W / 2, VIDEO_H * 0.36);
+    }
+    g.restore();
+  };
+
+  Game.prototype.download = function (blob, name) {
+    var url = URL.createObjectURL(blob);
     var a = el('a', 'display:none', this.root);
     a.href = url;
-    a.download = 'moto-track-' + T.trackId(this.source.points) + '.json';
+    a.download = name;
     a.click();
     a.remove();
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-    this.showToast('TRACK SAVED');
   };
 
   Game.prototype.showToast = function (text) {
@@ -674,7 +944,12 @@
   };
 
   Game.prototype.render = function () {
-    var g = this.ctx, b = this.bike;
+    this.drawWorld(this.ctx);
+    this.drawHud();
+  };
+
+  /* Everything on the canvas. Reads only view state, so a replay can drive it. */
+  Game.prototype.drawWorld = function (g) {
     var color = this.source.color || '#7ee787';
     var s = this.scale;
 
@@ -727,7 +1002,6 @@
     this.drawFinish(g);
     this.drawTrail(g);
     this.drawBike(g);
-    this.drawHud();
   };
 
   Game.prototype.withAlpha = function (color, a) {
@@ -942,6 +1216,7 @@
   };
 
   Game.prototype.destroy = function () {
+    if (this.recording) this.cancelVideo();
     this.alive = false;
     window.removeEventListener('resize', this.onResize);
     window.removeEventListener('keydown', this.onKeyDown, true);
