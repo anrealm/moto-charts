@@ -23,6 +23,14 @@
   .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .legend { display: flex; gap: 20px; font-size: 12px; opacity: .75; margin-top: 10px; justify-content: center; }
   .legend i { display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin-right: 6px; }
+  textarea {
+    width: 100%; box-sizing: border-box; min-height: 88px; resize: vertical;
+    background: #16181d; color: #e6edf3; border: 1px solid #30363d; border-radius: 8px;
+    padding: 10px 12px; font: 13px/1.5 ui-monospace, SFMono-Regular, monospace;
+  }
+  .hint { font-size: 12px; opacity: .6; margin: 0 0 10px; }
+  #trackMsg { font-size: 13px; min-height: 20px; }
+  #trackMsg.err { color: #f97583; }
   #diag { font: 12px/1.7 ui-monospace, SFMono-Regular, monospace; opacity: .75; white-space: pre-wrap; }
   .axis text { fill: #8b949e; font: 10px ui-sans-serif, system-ui, sans-serif; }
   .grid line { stroke: #ffffff14; }
@@ -64,9 +72,26 @@
     </div>
     <div id="diag" style="margin-top:14px"></div>
   </div>
+
+  <div class="card">
+    <h2>Your own track</h2>
+    <p class="hint">
+      Numbers in any separators: one series of values, or one <code>x, y</code> pair per line.
+      Decimals take a dot. Or load a track saved in the extension with <b>E</b>.
+    </p>
+    <textarea id="nums" spellcheck="false" placeholder="12 18 25 9 4 30 42 38 55 20"></textarea>
+    <div class="row" style="margin-top:10px">
+      <button id="rideNums">Ride these numbers</button>
+      <button class="ghost" id="loadFile">Load track file</button>
+      <input type="file" id="trackFile" accept=".json,application/json" hidden>
+      <button class="ghost" id="copyLink" hidden>Copy link to this track</button>
+    </div>
+    <div id="trackMsg" style="margin-top:10px"></div>
+  </div>
 </div>
 
 <script src="src/physics.js"></script>
+<script src="src/track.js"></script>
 <script src="src/game.js"></script>
 <script>
 (function () {
@@ -138,6 +163,70 @@
     var item = greenLine();
     MotoCharts.ride(MotoCharts._samplePath(item, 2), { color: item.color, label: 'Series A' });
   };
+
+  /*
+   * Own tracks. Whatever gets ridden here also lands in the address as #t=…,
+   * so the address bar is the share link; opening it rides the same track.
+   */
+  var trackMsg = document.getElementById('trackMsg');
+  var copyBtn = document.getElementById('copyLink');
+
+  function say(text, isErr) {
+    trackMsg.textContent = text;
+    trackMsg.className = isErr ? 'err' : '';
+  }
+
+  function rideOwn(points, color, note) {
+    var id = MotoTrack.trackId(points);
+    try {
+      MotoCharts.ride(points, { color: color || '#7ee787', label: 'track ' + id });
+    } catch (e) {
+      // a track the game refuses must not leave its half-built overlay behind
+      document.querySelectorAll('[data-moto-overlay]').forEach(function (n) { n.remove(); });
+      say('Cannot ride this: ' + e.message, true);
+      return;
+    }
+    history.replaceState(null, '', '#t=' + MotoTrack.toLink(points));
+    copyBtn.hidden = false;
+    say(note + ' — track ' + id + ', ' + points.length + ' points.');
+  }
+
+  document.getElementById('rideNums').onclick = function () {
+    try {
+      var r = MotoTrack.parseNumbers(document.getElementById('nums').value);
+      rideOwn(r.points, null, r.kind === 'xy' ? 'Read as x, y pairs' : 'Read as a series of values');
+    } catch (e) {
+      say(e.message, true);
+    }
+  };
+
+  var fileInput = document.getElementById('trackFile');
+  document.getElementById('loadFile').onclick = function () { fileInput.click(); };
+  fileInput.onchange = function () {
+    var f = fileInput.files[0];
+    fileInput.value = '';
+    if (!f) return;
+    if (f.size > 2e6) { say('That file is too big for a track.', true); return; }
+    f.text().then(function (text) {
+      var t = MotoTrack.fromFile(text);
+      rideOwn(t.points, t.color, 'Loaded ' + f.name);
+    }).catch(function (e) { say(e.message, true); });
+  };
+
+  copyBtn.onclick = function () {
+    navigator.clipboard.writeText(location.href).then(
+      function () { say('Link copied.'); },
+      function () { say('Copy failed — take the link from the address bar.', true); });
+  };
+
+  var linkMatch = /^#t=([A-Za-z0-9_-]+)$/.exec(location.hash);
+  if (linkMatch) {
+    try {
+      rideOwn(MotoTrack.fromLink(linkMatch[1]), null, 'Opened from a link');
+    } catch (e) {
+      say('This link does not hold a track: ' + e.message, true);
+    }
+  }
 
   document.getElementById('diagBtn').onclick = function () {
     var all = MotoCharts._collectPaths();

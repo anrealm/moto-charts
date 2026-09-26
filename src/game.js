@@ -19,6 +19,8 @@
    */
   var P = global.MotoPhysics;
   if (!P) throw new Error('moto-charts: physics core must be loaded first');
+  var T = global.MotoTrack;
+  if (!T) throw new Error('moto-charts: track codec must be loaded first');
 
   var Z = 2147483000;
   var STORE_KEY = 'moto-charts:best';
@@ -400,7 +402,7 @@
     this.help.innerHTML =
       '<b>↑</b> throttle &nbsp; <b>↓</b> reverse &nbsp; <b>Space</b> brake &nbsp; <b>←/→</b> lean<br>' +
       '<b>1</b> as drawn &nbsp; <b>2</b> rideable &nbsp; <b>3</b> mellow<br>' +
-      '<b>R</b> restart &nbsp; <b>P</b> pause &nbsp; <b>Esc</b> quit';
+      '<b>R</b> restart &nbsp; <b>P</b> pause &nbsp; <b>E</b> save track &nbsp; <b>Esc</b> quit';
 
     if (this.opts.track) {
       // explicit track options bypass the presets entirely
@@ -464,6 +466,7 @@
     this.stalled = 0;
     this.lastFlips = 0;
     this.toastUntil = 0;
+    this.clock = 0;
     this.airRun = 0;
     this.leanedThisFlight = false;
     this.riderLean = 0;
@@ -496,6 +499,7 @@
     if (down && k === 'Escape') { this.destroy(); e.preventDefault(); return; }
     if (down && (k === 'r' || k === 'R' || k === 'к' || k === 'К')) { this.reset(); e.preventDefault(); return; }
     if (down && (k === 'p' || k === 'P' || k === 'з' || k === 'З')) { this.paused = !this.paused; e.preventDefault(); return; }
+    if (down && (k === 'e' || k === 'E' || k === 'у' || k === 'У')) { this.exportTrack(); e.preventDefault(); return; }
     if (down && (k === '1' || k === '2' || k === '3')) {
       this.setMode(P.MODE_ORDER[parseInt(k, 10) - 1]);
       e.preventDefault();
@@ -527,6 +531,8 @@
 
   Game.prototype.update = function (dt) {
     var b = this.bike;
+    // ride time stops at a crash or finish; toasts still have to fade after it
+    this.clock += dt;
 
     if (!b.crashed && !b.finished) {
       this.time += dt;
@@ -583,7 +589,7 @@
     this.cam.x += (tx - this.cam.x) * f;
     this.cam.y += (ty - this.cam.y) * f;
 
-    if (this.toastUntil && this.time > this.toastUntil) {
+    if (this.toastUntil && this.clock > this.toastUntil) {
       this.toast.style.opacity = '0';
       this.toastUntil = 0;
     }
@@ -628,10 +634,26 @@
     }
   };
 
+  /*
+   * Downloads the ridden line as a track file, for the demo page to load. The
+   * file holds the points and the line colour only: not the page address, not
+   * its title.
+   */
+  Game.prototype.exportTrack = function () {
+    var url = URL.createObjectURL(new Blob([T.toFile(this.source)], { type: 'application/json' }));
+    var a = el('a', 'display:none', this.root);
+    a.href = url;
+    a.download = 'moto-track-' + T.trackId(this.source.points) + '.json';
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    this.showToast('TRACK SAVED');
+  };
+
   Game.prototype.showToast = function (text) {
     this.toast.textContent = text;
     this.toast.style.opacity = '1';
-    this.toastUntil = this.time + 1.4;
+    this.toastUntil = this.clock + 1.4;
   };
 
   Game.prototype.showBanner = function (title, sub, color) {
