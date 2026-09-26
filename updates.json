@@ -13,6 +13,10 @@
         {
           "version": "1.3.0",
           "update_link": "https://github.com/anrealm/moto-charts/releases/download/v1.3.0/moto-charts.xpi"
+        },
+        {
+          "version": "1.4.0",
+          "update_link": "https://github.com/anrealm/moto-charts/releases/download/v1.4.0/moto-charts.xpi"
         }
       ]
     }
