@@ -466,6 +466,7 @@
     this.toastUntil = 0;
     this.airRun = 0;
     this.leanedThisFlight = false;
+    this.riderLean = 0;
     this.banner.style.display = 'none';
     this.cam = { x: this.bike.x, y: this.bike.y };
     this.camInit = false;
@@ -530,6 +531,8 @@
     if (!b.crashed && !b.finished) {
       this.time += dt;
       P.advance(b, this.terrain, this.input, dt, this.cfg);
+      // eased, so a tap reads as a lean rather than a jump between two poses
+      this.riderLean += (this.input.tilt - this.riderLean) * Math.min(1, dt * 14);
 
       // trick scoring lives in the physics core, where it is unit-tested;
       // here we only react to it
@@ -798,21 +801,28 @@
     g.lineWidth = 1;
     g.stroke();
 
-    // rider
+    // rider; the body shifts with the lean keys so ←/→ read on the figure.
+    // The head is drawn around the physics head point (headX, headY), which
+    // decides crashes: its shift stays under the 4.4 radius, so that point
+    // never leaves the drawn head.
+    var L = this.riderLean;
+    var hipX = -8 + L * 1.5, hipY = -13;
+    var shX = -4 + L * 4.5, shY = -24 + Math.abs(L) * 1.5;
+    var headX = c.headX + L * 3, headY = c.headY + 2 + Math.abs(L) * 1;
     g.strokeStyle = b.crashed ? '#f97583' : '#ffd479';
     g.lineWidth = 2.6;
     g.beginPath();
-    g.moveTo(-8, -13);          // hip
-    g.lineTo(-4, -24);          // spine
-    g.lineTo(c.headX, c.headY + 4);
-    g.moveTo(-4, -22);
+    g.moveTo(hipX, hipY);
+    g.lineTo(shX, shY);         // spine
+    g.lineTo(headX, headY + 2);
+    g.moveTo(shX, shY + 2);
     g.lineTo(hw - 5, -15);      // arm to bars
-    g.moveTo(-8, -13);
+    g.moveTo(hipX, hipY);
     g.lineTo(-hw + 6, -6);      // leg
     g.stroke();
     g.fillStyle = b.crashed ? '#f97583' : '#ffd479';
     g.beginPath();
-    g.arc(c.headX, c.headY + 2, 4.4, 0, Math.PI * 2);
+    g.arc(headX, headY, 4.4, 0, Math.PI * 2);
     g.fill();
 
     // wheels
